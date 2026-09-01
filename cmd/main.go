@@ -43,6 +43,7 @@ import (
 
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/controller"
+	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/metrics"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -68,14 +69,18 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
-	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
-		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
-	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
+	// Defaults follow the HyperFleet health-endpoints / metrics standards, matching
+	// the API, Sentinel and Adapter components: metrics on :9090 over plain HTTP at
+	// /metrics, health/readiness on :8080. Set 0 on metrics-bind-address to disable.
+	flag.StringVar(&metricsAddr, "metrics-bind-address", ":9090", "The address the metrics endpoint binds to. "+
+		"Defaults to :9090 (HyperFleet standard). Set to 0 to disable the metrics service.")
+	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8080", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
-	flag.BoolVar(&secureMetrics, "metrics-secure", true,
-		"If set, the metrics endpoint is served securely via HTTPS. Use --metrics-secure=false to use HTTP instead.")
+	flag.BoolVar(&secureMetrics, "metrics-secure", false,
+		"If set, the metrics endpoint is served securely via HTTPS with authn/authz. "+
+			"The HyperFleet standard scrapes plain HTTP, so this defaults to false.")
 	flag.StringVar(&webhookCertPath, "webhook-cert-path", "", "The directory that contains the webhook certificate.")
 	flag.StringVar(&webhookCertName, "webhook-cert-name", "tls.crt", "The name of the webhook certificate file.")
 	flag.StringVar(&webhookCertKey, "webhook-cert-key", "tls.key", "The name of the webhook key file.")
@@ -92,6 +97,10 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	// Publish the build-info and up metrics into controller-runtime's registry so
+	// they are exposed on the same /metrics endpoint as the reconcile metrics.
+	metrics.Init()
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will

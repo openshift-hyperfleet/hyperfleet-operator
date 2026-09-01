@@ -49,6 +49,19 @@ kubectl apply -k config/samples/
 
 >**NOTE**: Ensure that the samples has default values to test it out.
 
+### Observability endpoints
+
+The manager exposes the standard HyperFleet observability endpoints (defaults):
+
+- **Liveness probe:**  `http://localhost:8080/healthz`
+- **Readiness probe:** `http://localhost:8080/readyz`
+- **Metrics:**         `http://localhost:9090/metrics`
+
+Metrics are served as plain HTTP under the `hyperfleet_operator_*` namespace. Ports
+are configurable via `--health-probe-bind-address` and `--metrics-bind-address`.
+See [docs/metrics.md](docs/metrics.md) for the full metric catalogue, labels, and
+example PromQL queries.
+
 ### To Uninstall
 **Delete the instances (CRs) from the cluster:**
 

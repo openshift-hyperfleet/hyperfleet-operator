@@ -21,6 +21,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -32,6 +33,7 @@ import (
 
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
 	apicomponent "github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/api"
+	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/metrics"
 )
 
 // Reconciler behavior specs (HYPERFLEET-1407). These run against envtest, which
@@ -241,6 +243,29 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 		doReconcile()
 		Expect(k8sClient.Get(ctx, operandKey(apicomponent.ResourceName), dep)).To(Succeed())
 		Expect(dep.Spec.Template.Annotations[configHashAnnotation]).NotTo(Equal(firstHash))
+	})
+
+	It("records observability metrics for the reconcile and its operands", func() {
+		By("reconciling to create the operands")
+		doReconcile()
+
+		By("publishing the applied-config digest as a single info series")
+		// SetAppliedConfigHash resets before setting, so exactly one series exists
+		// regardless of how many times the suite has reconciled.
+		Expect(testutil.CollectAndCount(metrics.AppliedConfig)).To(Equal(1))
+
+		By("publishing operand readiness for the api component")
+		// envtest is apiserver + etcd only: no deployment controller runs, so the
+		// operand never reports Available. The gauge must still be published, at 0.
+		Expect(testutil.ToFloat64(
+			metrics.OperandReady.WithLabelValues(apicomponent.ComponentName))).To(Equal(0.0))
+
+		By("counting a create-triggered rollout for the api operand")
+		// The Deployment did not exist before this reconcile (BeforeEach starts
+		// clean), so the reconcile records at least one create rollout.
+		Expect(testutil.ToFloat64(
+			metrics.OperandRollouts.WithLabelValues(apicomponent.ComponentName, metrics.TriggerCreate))).
+			To(BeNumerically(">=", 1))
 	})
 
 	It("returns without error when the CR is absent (deletion path)", func() {

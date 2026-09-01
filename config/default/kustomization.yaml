@@ -38,13 +38,9 @@ resources:
 # be able to communicate with the Webhook Server.
 #- ../network-policy
 
-# Uncomment the patches line if you enable Metrics
-patches:
-# [METRICS] The following patch will enable the metrics endpoint using HTTPS and the port :8443.
-# More info: https://book.kubebuilder.io/reference/metrics
-- path: manager_metrics_patch.yaml
-  target:
-    kind: Deployment
+# The metrics endpoint (:9090, plain HTTP, /metrics) and health probes (:8080)
+# are configured directly on the manager Deployment (config/manager/manager.yaml)
+# per the HyperFleet standard, so no metrics args patch is needed here.
 
 # Uncomment the patches line if you enable Metrics and CertManager
 # [METRICS-WITH-CERTS] To enable metrics protected with certManager, uncomment the following line.

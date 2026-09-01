@@ -21,10 +21,12 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -38,6 +40,7 @@ import (
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/apply"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/bundle"
+	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/metrics"
 )
 
 // HyperFleetConfigReconciler reconciles a HyperFleetConfig object. It is the
@@ -109,11 +112,20 @@ type HyperFleetConfigReconciler struct {
 func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
+	// Record reconcile latency regardless of outcome, and error rate by the stage
+	// that failed, so both are observable via hyperfleet_operator_reconcile_*.
+	start := time.Now()
+	defer func() { metrics.ObserveReconcile(time.Since(start)) }()
+
 	cr := &hyperfleetv1alpha1.HyperFleetConfig{}
 	if err := r.Get(ctx, req.NamespacedName, cr); err != nil {
 		// The CR is gone: its operands carry controller owner references, so the
 		// built-in garbage collector removes them. No finalizer is required.
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		metrics.IncReconcileError("get")
+		return ctrl.Result{}, fmt.Errorf("get HyperFleetConfig %q: %w", req.NamespacedName, err)
 	}
 
 	// Resolve the JWKS URL. When auth is on and the CR pins neither a JWKS URL nor
@@ -147,16 +159,27 @@ func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	for _, component := range components {
 		objs, err := component.Render(ctx, cr)
 		if err != nil {
+			metrics.IncReconcileError("render")
 			return ctrl.Result{}, fmt.Errorf("render component %q: %w", component.Name(), err)
 		}
 		// Stamp the config-hash on the component's Deployment pod template so a
 		// config or secret-value change rolls the pods. For components without a
 		// ConfigMap+Deployment pair (none today besides the API) this is a no-op.
 		stampConfigHash(objs, secretData)
+		// Detect (and count) an imminent operand rollout before applying, while the
+		// live object still reflects the previous desired state. Runs after
+		// stampConfigHash so the desired template it hashes is the final one.
+		r.recordRollouts(ctx, component.Name(), objs)
 		if err := apply.Objects(ctx, r.Client, cr, r.Scheme, objs); err != nil {
+			metrics.IncReconcileError("apply")
 			return ctrl.Result{}, fmt.Errorf("apply component %q: %w", component.Name(), err)
 		}
+		// Publish operand readiness from the freshly applied state.
+		r.recordReadiness(ctx, component.Name(), objs)
 	}
+
+	// Publish the digest of the config we just applied.
+	metrics.SetAppliedConfigHash(hashConfig(cr.Spec))
 
 	// TODO(HYPERFLEET-1409): roll each component's Conditions up into
 	// status.conditions and set status.observedGeneration.
