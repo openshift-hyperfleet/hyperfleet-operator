@@ -260,15 +260,24 @@ hyperfleet_operator_up
 
 ## Prometheus Operator Integration
 
-A `ServiceMonitor` ships in the OLM bundle so Prometheus scrapes the operator's
-`:9090` endpoint over plain HTTP once the operator is installed via OLM. It is
-packaged under `config/prometheus` and wired into the bundle via
-`config/manifests`.
+The operator creates its own `ServiceMonitor` (`controller-manager-metrics-monitor`)
+at runtime so Prometheus scrapes the `:9090` endpoint over plain HTTP. The
+bootstrap is conditional: it runs only when the cluster serves the Prometheus
+Operator API (`monitoring.coreos.com/v1`), and is skipped — with a log line — when
+that CRD is absent. Metrics remain available on `:9090` either way. See the
+`internal/servicemonitor` package.
 
-It is intentionally **not** part of `config/default`, so `make deploy` and the
-kind-based e2e do not require the Prometheus Operator CRDs to be present on the
-target cluster. To scrape the operator on a cluster without OLM, apply
-`config/prometheus/monitor.yaml` manually (requires the `ServiceMonitor` CRD).
+The `ServiceMonitor` is intentionally **not** shipped in the OLM bundle. OLM
+applies a bundle's arbitrary manifests but does not install the CRDs they depend
+on, so bundling it would fail the InstallPlan — and block the entire operator
+install — on any cluster without the Prometheus Operator CRD. Because HyperFleet
+targets generic Kubernetes (not only OpenShift, where that CRD is guaranteed), the
+runtime bootstrap above degrades gracefully instead.
+
+A cluster that installs the Prometheus Operator *after* the operator started picks
+the `ServiceMonitor` up on the operator's next restart. For GitOps, the equivalent
+static manifest remains available at `config/prometheus/monitor.yaml` and can be
+applied directly (requires the `ServiceMonitor` CRD).
 
 ## Related Documentation
 

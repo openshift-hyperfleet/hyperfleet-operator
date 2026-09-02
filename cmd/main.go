@@ -44,6 +44,7 @@ import (
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/controller"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/metrics"
+	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/servicemonitor"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -264,6 +265,19 @@ func main() {
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder
+
+	// Create the operator's own ServiceMonitor at runtime, but only when the
+	// Prometheus Operator API is present. Shipping it in the OLM bundle would fail
+	// the InstallPlan on clusters without the monitoring.coreos.com CRD and block
+	// the operator install; this bootstrapper degrades gracefully instead. See the
+	// servicemonitor package doc for the full rationale.
+	if err := mgr.Add(&servicemonitor.Bootstrapper{
+		Config:    mgr.GetConfig(),
+		Namespace: operatorNamespace,
+	}); err != nil {
+		setupLog.Error(err, "unable to add ServiceMonitor bootstrapper")
+		os.Exit(1)
+	}
 
 	if metricsCertWatcher != nil {
 		setupLog.Info("Adding metrics certificate watcher to manager")

@@ -5,11 +5,14 @@ resources:
 - ../default
 - ../samples
 - ../scorecard
-# The Prometheus ServiceMonitor ships in the bundle so OLM wires up scraping of
-# the operator's :9090 metrics endpoint. It lives here (bundle packaging) rather
-# than in ../default so `make deploy`/kind runs do not require the Prometheus
-# Operator CRDs to be present on the target cluster.
-- ../prometheus
+# The Prometheus ServiceMonitor is deliberately NOT included in the bundle. OLM
+# applies a bundle's arbitrary manifests but does not install the CRDs they need,
+# so bundling the ServiceMonitor would fail the InstallPlan — and block the whole
+# operator install — on clusters without the Prometheus Operator CRD. HyperFleet
+# targets generic Kubernetes, so the operator creates the ServiceMonitor itself at
+# runtime only when the monitoring.coreos.com/v1 API is present (see the
+# internal/servicemonitor package). config/prometheus remains an optional GitOps
+# overlay for users who prefer to apply it statically.
 
 # [WEBHOOK] To enable webhooks, uncomment all the sections with [WEBHOOK] prefix.
 # Do NOT uncomment sections with prefix [CERTMANAGER], as OLM does not support cert-manager.
