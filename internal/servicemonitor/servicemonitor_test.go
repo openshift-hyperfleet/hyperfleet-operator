@@ -23,6 +23,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
+// TestBuildServiceMonitor verifies buildServiceMonitor renders the expected
+// name, namespace, GVK, metrics Service selector and single scrape endpoint.
 func TestBuildServiceMonitor(t *testing.T) {
 	sm := buildServiceMonitor("hyperfleet-system")
 
@@ -63,6 +65,8 @@ func TestBuildServiceMonitor(t *testing.T) {
 	}
 }
 
+// TestHasServiceMonitorKind verifies hasServiceMonitorKind detects the
+// ServiceMonitor kind in a discovery list and handles a nil/absent group.
 func TestHasServiceMonitorKind(t *testing.T) {
 	tests := []struct {
 		name string

@@ -102,7 +102,7 @@ failed, so error rate can be broken down by cause.
 |-------|-------------|----------------|
 | `component` | Component name (const) | `operator` |
 | `version` | Application version (const) | `v1.2.3` |
-| `reason` | Reconcile stage that failed | `get`, `render`, `apply` |
+| `reason` | Reconcile stage that failed | `get`, `discovery`, `secrets`, `bundle`, `render`, `apply` |
 
 **Example output:**
 

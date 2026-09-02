@@ -267,15 +267,25 @@ func TestIsDisallowedDiscoveryTarget(t *testing.T) {
 		"127.0.0.1", "::1", // loopback
 		"10.0.0.5", "172.16.0.5", "192.168.1.5", // RFC1918 private
 		"169.254.169.254", "169.254.1.1", // link-local, incl. cloud metadata
-		"0.0.0.0",   // unspecified
-		"224.0.0.1", // multicast
-		"fc00::1",   // IPv6 unique local
+		"0.0.0.0",       // unspecified
+		"224.0.0.1",     // multicast
+		"fc00::1",       // IPv6 unique local
+		"100.64.0.1",    // CGNAT / shared address space (RFC 6598)
+		"100.127.255.1", // CGNAT upper bound
+		"0.1.2.3",       // "this host on this network" (RFC 1122)
+		"192.0.0.1",     // IETF protocol assignments
+		"198.18.0.1",    // benchmarking
+		"240.0.0.1",     // reserved / former class E
+		"2001:db8::1",   // IPv6 documentation
 	}
 	for _, s := range disallowed {
 		g.Expect(isDisallowedDiscoveryTarget(net.ParseIP(s))).To(BeTrue(), s)
 	}
 
-	allowed := []string{"8.8.8.8", "1.1.1.1", "2001:4860:4860::8888"}
+	allowed := []string{
+		"8.8.8.8", "1.1.1.1", "2001:4860:4860::8888",
+		"100.63.255.255", "100.128.0.0", // just outside the CGNAT block, still public
+	}
 	for _, s := range allowed {
 		g.Expect(isDisallowedDiscoveryTarget(net.ParseIP(s))).To(BeFalse(), s)
 	}

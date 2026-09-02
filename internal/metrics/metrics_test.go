@@ -24,6 +24,8 @@ import (
 	dto "github.com/prometheus/client_model/go"
 )
 
+// TestObserveReconcileRecordsASample verifies ObserveReconcile records a
+// duration observation into the reconcile histogram.
 func TestObserveReconcileRecordsASample(t *testing.T) {
 	ObserveReconcile(150 * time.Millisecond)
 
@@ -36,6 +38,8 @@ func TestObserveReconcileRecordsASample(t *testing.T) {
 	}
 }
 
+// TestIncReconcileErrorCountsByReason verifies IncReconcileError increments the
+// error counter for the series identified by the given reason label.
 func TestIncReconcileErrorCountsByReason(t *testing.T) {
 	// Unique reason so the assertion is independent of other tests in this package.
 	const reason = "test-reason"
@@ -46,6 +50,8 @@ func TestIncReconcileErrorCountsByReason(t *testing.T) {
 	}
 }
 
+// TestSetOperandReadyTogglesGauge verifies SetOperandReady drives the operand
+// readiness gauge to 1 when ready and back to 0 when not.
 func TestSetOperandReadyTogglesGauge(t *testing.T) {
 	const operand = "test-ready"
 
@@ -60,6 +66,8 @@ func TestSetOperandReadyTogglesGauge(t *testing.T) {
 	}
 }
 
+// TestIncOperandRolloutCountsByTrigger verifies IncOperandRollout increments the
+// rollout counter for the series keyed by operand and trigger.
 func TestIncOperandRolloutCountsByTrigger(t *testing.T) {
 	const operand = "test-rollout"
 	IncOperandRollout(operand, TriggerImage)
@@ -69,6 +77,8 @@ func TestIncOperandRolloutCountsByTrigger(t *testing.T) {
 	}
 }
 
+// TestSetAppliedConfigHashKeepsASingleSeries verifies SetAppliedConfigHash resets
+// the info gauge so only the latest hash's series exists at any time.
 func TestSetAppliedConfigHashKeepsASingleSeries(t *testing.T) {
 	SetAppliedConfigHash("hash-one")
 	SetAppliedConfigHash("hash-two")

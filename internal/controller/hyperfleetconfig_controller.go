@@ -133,6 +133,7 @@ func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// here rather than in the pure renderer. Empty otherwise.
 	jwksURL, err := r.resolveJWKSURL(ctx, cr)
 	if err != nil {
+		metrics.IncReconcileError("discovery")
 		return ctrl.Result{}, fmt.Errorf("resolve JWKS URL: %w", err)
 	}
 
@@ -144,6 +145,7 @@ func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// pods roll once the Secret appears.
 	secretData, err := r.referencedSecretData(ctx, cr)
 	if err != nil {
+		metrics.IncReconcileError("secrets")
 		return ctrl.Result{}, fmt.Errorf("read referenced secrets: %w", err)
 	}
 
@@ -153,6 +155,7 @@ func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		ResolvedJWKSURL: jwksURL,
 	})
 	if err != nil {
+		metrics.IncReconcileError("bundle")
 		return ctrl.Result{}, fmt.Errorf("resolve components: %w", err)
 	}
 

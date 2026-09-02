@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -158,7 +159,7 @@ func (r *HyperFleetConfigReconciler) recordReadiness(ctx context.Context, compon
 func deploymentAvailable(dep *appsv1.Deployment) bool {
 	for _, c := range dep.Status.Conditions {
 		if c.Type == appsv1.DeploymentAvailable {
-			return c.Status == "True"
+			return c.Status == corev1.ConditionTrue
 		}
 	}
 	return false
