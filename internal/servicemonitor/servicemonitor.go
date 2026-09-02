@@ -29,6 +29,7 @@ package servicemonitor
 
 import (
 	"context"
+	"fmt"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -124,14 +125,15 @@ func (b *Bootstrapper) Start(ctx context.Context) error {
 func serviceMonitorAvailable(cfg *rest.Config) (bool, error) {
 	dc, err := discovery.NewDiscoveryClientForConfig(cfg)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("create discovery client: %w", err)
 	}
-	list, err := dc.ServerResourcesForGroupVersion(smGroup + "/" + smVersion)
+	groupVersion := smGroup + "/" + smVersion
+	list, err := dc.ServerResourcesForGroupVersion(groupVersion)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return false, nil
 		}
-		return false, err
+		return false, fmt.Errorf("list server resources for %s: %w", groupVersion, err)
 	}
 	return hasServiceMonitorKind(list), nil
 }
