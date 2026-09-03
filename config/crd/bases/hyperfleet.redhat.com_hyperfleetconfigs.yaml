@@ -26,6 +26,12 @@ spec:
     - jsonPath: .status.conditions[?(@.type=="Available")].status
       name: Available
       type: string
+    - jsonPath: .status.conditions[?(@.type=="Progressing")].status
+      name: Progressing
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Degraded")].status
+      name: Degraded
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -210,8 +216,9 @@ spec:
           status:
             description: |-
               HyperFleetConfigStatus defines the observed state of HyperFleetConfig. It is
-              populated by the bundle controller in later stories; this story defines the
-              schema only.
+              populated by the bundle controller after every reconcile (HYPERFLEET-1409),
+              rolling up each component's health into the Available/Progressing/Degraded
+              conditions.
             properties:
               conditions:
                 description: |-

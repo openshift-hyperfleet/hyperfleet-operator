@@ -346,6 +346,141 @@ func TestRenderRoleHasNoRules(t *testing.T) {
 	g.Expect(rb.Subjects[0].Namespace).To(Equal(testNamespace))
 }
 
+// deploymentWithStatus returns a Deployment named ResourceName with the given
+// spec.replicas and status fields set, for feeding directly into Conditions
+// without any cluster/client dependency. ObservedGeneration matches generation
+// (the Deployment controller has caught up); the mid-rollout test overrides it
+// after construction to simulate a lag.
+func deploymentWithStatus(replicas, availableReplicas, updatedReplicas int32, generation int64) *appsv1.Deployment {
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: ResourceName, Generation: generation},
+		Spec:       appsv1.DeploymentSpec{Replicas: ptr.To(replicas)},
+		Status: appsv1.DeploymentStatus{
+			AvailableReplicas:  availableReplicas,
+			UpdatedReplicas:    updatedReplicas,
+			ObservedGeneration: generation,
+		},
+	}
+}
+
+func condMapByType(conds []metav1.Condition) map[string]metav1.Condition {
+	out := make(map[string]metav1.Condition, len(conds))
+	for _, c := range conds {
+		out[c.Type] = c
+	}
+	return out
+}
+
+func TestConditionsNoDeployment(t *testing.T) {
+	g := NewWithT(t)
+
+	conds, err := New("img", testNamespace, Options{}).Conditions(context.Background(), testCR(), nil)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	byType := condMapByType(conds)
+	g.Expect(byType[hyperfleetv1alpha1.ConditionAvailable].Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(byType[hyperfleetv1alpha1.ConditionAvailable].Reason).To(Equal(hyperfleetv1alpha1.ReasonDeploymentUnavailable))
+	g.Expect(byType[hyperfleetv1alpha1.ConditionProgressing].Status).To(Equal(metav1.ConditionTrue))
+	g.Expect(byType[hyperfleetv1alpha1.ConditionProgressing].Reason).To(Equal(hyperfleetv1alpha1.ReasonRolloutInProgress))
+}
+
+func TestConditionsZeroAvailableReplicas(t *testing.T) {
+	g := NewWithT(t)
+
+	dep := deploymentWithStatus(1, 0, 0, 1)
+	conds, err := New("img", testNamespace, Options{}).Conditions(context.Background(), testCR(), []client.Object{dep})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	byType := condMapByType(conds)
+	g.Expect(byType[hyperfleetv1alpha1.ConditionAvailable].Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(byType[hyperfleetv1alpha1.ConditionAvailable].Reason).To(Equal(hyperfleetv1alpha1.ReasonDeploymentUnavailable))
+}
+
+func TestConditionsPartiallyReady(t *testing.T) {
+	g := NewWithT(t)
+
+	// 2 desired, only 1 available: not fully Available, and still Progressing
+	// since not all replicas are updated.
+	dep := deploymentWithStatus(2, 1, 1, 1)
+	conds, err := New("img", testNamespace, Options{}).Conditions(context.Background(), testCR(), []client.Object{dep})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	byType := condMapByType(conds)
+	g.Expect(byType[hyperfleetv1alpha1.ConditionAvailable].Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(byType[hyperfleetv1alpha1.ConditionAvailable].Reason).To(Equal(hyperfleetv1alpha1.ReasonDeploymentNotReady))
+	g.Expect(byType[hyperfleetv1alpha1.ConditionProgressing].Status).To(Equal(metav1.ConditionTrue))
+}
+
+func TestConditionsFullyReadyAndStable(t *testing.T) {
+	g := NewWithT(t)
+
+	dep := deploymentWithStatus(1, 1, 1, 1)
+	conds, err := New("img", testNamespace, Options{}).Conditions(context.Background(), testCR(), []client.Object{dep})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	byType := condMapByType(conds)
+	g.Expect(byType[hyperfleetv1alpha1.ConditionAvailable].Status).To(Equal(metav1.ConditionTrue))
+	g.Expect(byType[hyperfleetv1alpha1.ConditionAvailable].Reason).To(Equal(hyperfleetv1alpha1.ReasonDeploymentAvailable))
+	g.Expect(byType[hyperfleetv1alpha1.ConditionProgressing].Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(byType[hyperfleetv1alpha1.ConditionProgressing].Reason).To(Equal(hyperfleetv1alpha1.ReasonRolloutComplete))
+}
+
+func TestConditionsMidRollout(t *testing.T) {
+	g := NewWithT(t)
+
+	// Fully available at the old generation, but a new generation has not yet
+	// been observed by the Deployment controller: still Progressing.
+	dep := deploymentWithStatus(1, 1, 1, 2)
+	dep.Status.ObservedGeneration = 1
+	conds, err := New("img", testNamespace, Options{}).Conditions(context.Background(), testCR(), []client.Object{dep})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	byType := condMapByType(conds)
+	g.Expect(byType[hyperfleetv1alpha1.ConditionProgressing].Status).To(Equal(metav1.ConditionTrue))
+	g.Expect(byType[hyperfleetv1alpha1.ConditionProgressing].Reason).To(Equal(hyperfleetv1alpha1.ReasonRolloutInProgress))
+}
+
+func TestConditionsFindsDeploymentInMixedKindSlice(t *testing.T) {
+	g := NewWithT(t)
+
+	// applied carries every rendered operand kind, in Render's actual order —
+	// proves findDeployment picks the Deployment out by kind+name rather than
+	// assuming it is the only or first element.
+	dep := deploymentWithStatus(1, 1, 1, 1)
+	applied := []client.Object{
+		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: ResourceName}},
+		&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: ResourceName}},
+		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: ResourceName}},
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapName}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: ResourceName}},
+		dep,
+	}
+
+	conds, err := New("img", testNamespace, Options{}).Conditions(context.Background(), testCR(), applied)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	byType := condMapByType(conds)
+	g.Expect(byType[hyperfleetv1alpha1.ConditionAvailable].Status).To(Equal(metav1.ConditionTrue))
+	g.Expect(byType[hyperfleetv1alpha1.ConditionAvailable].Reason).To(Equal(hyperfleetv1alpha1.ReasonDeploymentAvailable))
+}
+
+func TestConditionsNilSpecReplicasDefaultsToOne(t *testing.T) {
+	g := NewWithT(t)
+
+	// Spec.Replicas == nil (never set) must fall back to the same default of 1
+	// that render.go's deployment() currently hardcodes, not a zero-value 0
+	// (which would make every replica count vacuously "desired").
+	dep := deploymentWithStatus(1, 1, 1, 1)
+	dep.Spec.Replicas = nil
+
+	conds, err := New("img", testNamespace, Options{}).Conditions(context.Background(), testCR(), []client.Object{dep})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	byType := condMapByType(conds)
+	g.Expect(byType[hyperfleetv1alpha1.ConditionAvailable].Status).To(Equal(metav1.ConditionTrue))
+	g.Expect(byType[hyperfleetv1alpha1.ConditionProgressing].Status).To(Equal(metav1.ConditionFalse))
+}
+
 func TestRenderService(t *testing.T) {
 	g := NewWithT(t)
 
