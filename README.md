@@ -6,6 +6,11 @@ A Kubernetes operator for HyperFleet cluster lifecycle management.
 
 hyperfleet-operator packages and delivers HyperFleet as a standard Kubernetes operator, installed and managed through OLM. It exposes a single cluster-scoped custom resource, `HyperFleetConfig`, as the entire partner-facing surface: install, configure, and observe HyperFleet through that one CR and its status conditions, with everything else the operator manages kept internal.
 
+## Installation guides
+
+- [Bundle development and installation](docs/bundle.md)
+- [Disconnected OpenShift installation with oc-mirror v2](docs/disconnected-install.md)
+
 ## Getting Started
 
 ### Prerequisites

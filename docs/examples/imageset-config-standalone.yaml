@@ -1,0 +1,10 @@
+# Standalone registry+v1 fallback. Replace every example with an authenticated
+# released pullspec. additionalImages copies exactly these artifacts; it does
+# not discover bundle relatedImages and does not create an OLM catalog.
+apiVersion: mirror.openshift.io/v2alpha1
+kind: ImageSetConfiguration
+mirror:
+  additionalImages:
+  - name: registry.example.com/hyperfleet/hyperfleet-operator-bundle@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  - name: registry.example.com/hyperfleet/hyperfleet-operator@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  - name: registry.example.com/hyperfleet/hyperfleet-api@sha256:0000000000000000000000000000000000000000000000000000000000000000

@@ -27,8 +27,8 @@ import (
 )
 
 // DefaultImage is the compiled-in fallback image used when the operator is not
-// given RELATED_IMAGE_HYPERFLEET_API. Production deployments override it with a
-// digest-pinned image via that env var (OLM relatedImages convention).
+// given RELATED_IMAGE_HYPERFLEET_API. It is digest-pinned so plain-manifest and
+// local deployments use the same immutable image contract as OLM installs.
 //
 // Must be v0.3.0 or later: config.yaml renders entities (pkg/registry) and the
 // multi-issuer server.jwt.configs list, neither of which exist in v0.2.x's
@@ -50,7 +50,7 @@ import (
 // prefix there, unlike the hyperfleet-api git tag). openshift-hyperfleet/hyperfleet-api
 // is a legacy pre-Konflux registry that stopped receiving pushes after v0.2.1
 // and never got a v0.4.0 image at all (PR #6 review comment r3905519856).
-const DefaultImage = "quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-api:0.4.0"
+const DefaultImage = "quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-api@sha256:8533d0d875480f31f5112e454659a095a5d2e993c139a9045a06be6b67b829ca"
 
 // Component renders the HyperFleet API operand. It satisfies the bundle.Component
 // contract structurally (no import of internal/bundle, avoiding an import cycle:

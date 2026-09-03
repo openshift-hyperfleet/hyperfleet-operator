@@ -1,0 +1,6 @@
+# Source of truth for the images deployable by the bundle CSV.
+images:
+- name: hyperfleet-operator
+  image: quay.io/redhat-user-workloads/hyperfleet-tenant/hyperfleet/hyperfleet-operator@sha256:31e365d312b6f3d483913d4029eba565abd64ab38a6d117658324afe225f708d
+- name: hyperfleet-api
+  image: quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-api@sha256:8533d0d875480f31f5112e454659a095a5d2e993c139a9045a06be6b67b829ca

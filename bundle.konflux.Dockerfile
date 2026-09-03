@@ -1,5 +1,5 @@
 # Konflux bundle image build. Unlike the auto-generated bundle.Dockerfile (used
-# for local dev with operator-sdk), this runs bundle-hack/update_bundle.sh to
+# for local dev with operator-sdk), this runs hack/bundle/update_bundle.sh to
 # patch digest-pinned image references into the CSV at build time.
 FROM registry.access.redhat.com/ubi9/ubi-minimal:latest AS builder-runner
 RUN microdnf install -y tar gzip && \
@@ -12,10 +12,10 @@ FROM builder-runner AS builder
 ARG HYPERFLEET_OPERATOR_IMAGE_PULLSPEC="quay.io/redhat-user-workloads/hyperfleet-tenant/hyperfleet/hyperfleet-operator@sha256:31e365d312b6f3d483913d4029eba565abd64ab38a6d117658324afe225f708d"
 ENV HYPERFLEET_OPERATOR_IMAGE_PULLSPEC=${HYPERFLEET_OPERATOR_IMAGE_PULLSPEC}
 
-ARG HYPERFLEET_API_IMAGE_PULLSPEC="quay.io/redhat-user-workloads/hyperfleet-tenant/hyperfleet/hyperfleet-api@sha256:8533d0d875480f31f5112e454659a095a5d2e993c139a9045a06be6b67b829ca"
+ARG HYPERFLEET_API_IMAGE_PULLSPEC="quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-api@sha256:8533d0d875480f31f5112e454659a095a5d2e993c139a9045a06be6b67b829ca"
 ENV HYPERFLEET_API_IMAGE_PULLSPEC=${HYPERFLEET_API_IMAGE_PULLSPEC}
 
-COPY bundle-hack .
+COPY hack/bundle .
 COPY bundle/manifests /manifests/
 
 RUN ./update_bundle.sh

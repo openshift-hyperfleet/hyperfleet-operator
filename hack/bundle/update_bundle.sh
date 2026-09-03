@@ -2,9 +2,23 @@
 set -euo pipefail
 
 CSV_FILE="${CSV_FILE:-/manifests/hyperfleet-operator.clusterserviceversion.yaml}"
+YQ="${YQ:-yq}"
+
+require_digest_pullspec() {
+  local variable_name="$1"
+  local pullspec="${!variable_name:-}"
+  if [[ ! "${pullspec}" =~ ^[^[:space:]]+@sha256:[0-9a-f]{64}$ ]]; then
+    echo "error: ${variable_name} must be a non-empty sha256 digest pullspec, got '${pullspec}'" >&2
+    exit 1
+  fi
+}
+
+require_digest_pullspec HYPERFLEET_OPERATOR_IMAGE_PULLSPEC
+require_digest_pullspec HYPERFLEET_API_IMAGE_PULLSPEC
+[[ -f "${CSV_FILE}" ]] || { echo "error: CSV not found: ${CSV_FILE}" >&2; exit 1; }
 
 # Update image references in the CSV file using yq
-yq eval '
+"${YQ}" eval '
   # Update operator deployment image
   (.spec.install.spec.deployments[].spec.template.spec.containers[] | select(.name == "manager") | .image) = strenv(HYPERFLEET_OPERATOR_IMAGE_PULLSPEC) |
 
