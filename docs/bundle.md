@@ -1,3 +1,9 @@
+# Bundle installation and development
+
+For an OpenShift 4.18+ air-gapped installation using oc-mirror v2, follow the
+[disconnected installation guide](disconnected-install.md). This document
+covers bundle production and connected development workflows.
+
 ## Pre-merge checks
 1. Updates to bundle.Dockerfile are also reflected in bundle.konflux.Dockerfile
 2. bundle/ is correctly updated before merging
@@ -9,8 +15,8 @@ Once Konflux is in place, the CI pipeline will automatically handle bundling bui
 
 1. Konflux builds the operator image and publishes it to quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator
 2. The operator-bundle .tekton pipeline will be triggered by any update to the bundle.konflux.Dockerfile
-2. `bundle.konflux.Dockerfile` runs `update_bundle.sh` with the new operator image reference
-3. `update_bundle.sh` uses yq to update the CSV to ensure the operator deployment has proper values - image, relatedImages, annotations, etc.
+2. `bundle.konflux.Dockerfile` runs `hack/bundle/update_bundle.sh` with the new operator image reference
+3. `hack/bundle/update_bundle.sh` uses yq to update the CSV to ensure the operator deployment has proper values - image, relatedImages, annotations, etc.
 4. Publishes the operator-bundle to quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator-bundle
 
 (HYPERFLEET-1411: TODO add more information once the konflux pipelines are in place)

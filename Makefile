@@ -8,6 +8,7 @@ VERSION ?= 0.0.1
 # Set the Operator SDK version to use. By default, what is installed on the system is used.
 # This is useful for CI or a project to utilize a specific version of the operator-sdk toolkit.
 OPERATOR_SDK_VERSION ?= v1.42.3
+YQ_VERSION ?= v4.44.1
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -120,8 +121,12 @@ cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 
 ##@ Lint
 
+.PHONY: verify-related-images
+verify-related-images: ## Verify immutable deployable images match CSV relatedImages.
+	go run ./hack/verify-related-images
+
 .PHONY: lint
-lint: ## Run golangci-lint linter
+lint: verify-related-images ## Run image verification and golangci-lint.
 	$(GOLANGCI_LINT) run
 
 .PHONY: lint-fix
@@ -133,6 +138,18 @@ lint-config: ## Verify golangci-lint linter configuration
 	$(GOLANGCI_LINT) config verify
 
 ##@ Build
+
+OC_MIRROR_IMAGE ?= hyperfleet-oc-mirror:local
+
+.PHONY: build-oc-mirror-image
+build-oc-mirror-image: ## Build the containerized oc-mirror runner.
+	$(CONTAINER_TOOL) build -f hack/oc-mirror.Dockerfile -t $(OC_MIRROR_IMAGE) .
+
+.PHONY: test-disconnected-mirror
+test-disconnected-mirror: ## Exercise the disk-to-mirror archive transfer.
+	CONTAINER_TOOL=$(CONTAINER_TOOL) OC_MIRROR_IMAGE=$(OC_MIRROR_IMAGE) \
+	BUNDLE_IMAGE="$(BUNDLE_IMAGE)" OPERATOR_IMAGE="$(OPERATOR_IMAGE)" API_IMAGE="$(API_IMAGE)" \
+	./hack/test-disconnected-mirror.sh
 
 .PHONY: build
 build: manifests generate fmt vet ## Build manager binary.
@@ -350,16 +367,18 @@ FROM_INDEX_OPT := --from-index $(CATALOG_BASE_IMG)
 endif
 
 .PHONY: bundle
-bundle: manifests operator-sdk ## Generate bundle manifests and metadata, then validate generated files.
+bundle: manifests operator-sdk yq ## Generate bundle manifests and metadata, then validate generated files.
 	$(OPERATOR_SDK) generate kustomize manifests -q
 	$(KUSTOMIZE) build config/manifests | $(OPERATOR_SDK) generate bundle $(BUNDLE_GEN_FLAGS)
+	HYPERFLEET_OPERATOR_IMAGE_PULLSPEC="$$($(YQ) eval '.spec.install.spec.deployments[].spec.template.spec.containers[] | select(.name == "manager") | .image' bundle/manifests/hyperfleet-operator.clusterserviceversion.yaml)" CSV_FILE=bundle/manifests/hyperfleet-operator.clusterserviceversion.yaml ./hack/bundle/add_operator_related_image.sh
 	$(OPERATOR_SDK) bundle validate ./bundle
 
 .PHONY: bundle-override-img
-bundle-override-img: manifests operator-sdk ## Generate bundle with IMG override, then restore kustomization.yaml
+bundle-override-img: manifests operator-sdk yq ## Generate bundle with IMG override, then restore kustomization.yaml
 	$(OPERATOR_SDK) generate kustomize manifests -q
 	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG)
 	$(KUSTOMIZE) build config/manifests | $(OPERATOR_SDK) generate bundle $(BUNDLE_GEN_FLAGS)
+	HYPERFLEET_OPERATOR_IMAGE_PULLSPEC="$$($(YQ) eval '.spec.install.spec.deployments[].spec.template.spec.containers[] | select(.name == "manager") | .image' bundle/manifests/hyperfleet-operator.clusterserviceversion.yaml)" CSV_FILE=bundle/manifests/hyperfleet-operator.clusterserviceversion.yaml ./hack/bundle/add_operator_related_image.sh --allow-tag
 	$(OPERATOR_SDK) bundle validate ./bundle
 	@echo "Bundle generated with IMG=$(IMG)"
 	@echo "Note: config/manager/kustomization.yaml has been modified. Commit or reset as needed."
@@ -395,6 +414,23 @@ $(LOCALBIN):
 ## Tool Binaries
 KUBECTL ?= kubectl
 KIND ?= kind
+
+.PHONY: yq
+YQ ?= $(LOCALBIN)/yq
+yq: ## Download yq locally if necessary.
+ifeq (,$(wildcard $(YQ)))
+ifeq (, $(shell which yq 2>/dev/null))
+	@{ \
+	set -e ;\
+	mkdir -p $(dir $(YQ)) ;\
+	OS=$(shell go env GOOS) && ARCH=$(shell go env GOARCH) && \
+	curl -sSLo $(YQ) https://github.com/mikefarah/yq/releases/download/$(YQ_VERSION)/yq_$${OS}_$${ARCH} ;\
+	chmod +x $(YQ) ;\
+	}
+else
+YQ = $(shell which yq)
+endif
+endif
 
 .PHONY: operator-sdk
 OPERATOR_SDK ?= $(LOCALBIN)/operator-sdk

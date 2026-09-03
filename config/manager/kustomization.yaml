@@ -4,8 +4,8 @@ kind: Kustomization
 resources:
 - manager.yaml
 
-# Base image configuration for local development
-# For production/Konflux builds, digest-pinned images are set via bundle.konflux.Dockerfile ARG overrides
+# Immutable production defaults. Local development may override these values
+# with the targets below; mutable development images must not be published.
 #
 # Local development override:
 #   make bundle-override-img IMG=quay.io/<quay_repo>/hyperfleet-operator:dev-<git_sha>
@@ -15,8 +15,8 @@ resources:
 #   git checkout config/manager/kustomization.yaml
 images:
 - name: controller
-  newName: quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator
-  newTag: latest
+  newName: quay.io/redhat-user-workloads/hyperfleet-tenant/hyperfleet/hyperfleet-operator
+  digest: sha256:31e365d312b6f3d483913d4029eba565abd64ab38a6d117658324afe225f708d
 
 # RELATED_IMAGE_HYPERFLEET_API environment variable
 # Sets the image used for the API operand.
@@ -34,7 +34,7 @@ patches:
       path: /spec/template/spec/containers/0/env/-
       value:
         name: RELATED_IMAGE_HYPERFLEET_API
-        value: quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-api:latest
+        value: quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-api@sha256:8533d0d875480f31f5112e454659a095a5d2e993c139a9045a06be6b67b829ca
   target:
     kind: Deployment
     name: controller-manager
