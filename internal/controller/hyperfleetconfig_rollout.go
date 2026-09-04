@@ -408,9 +408,12 @@ func computeConfigHash(configYAML string, entries []hashEntry) string {
 // ConfigMap plus the referenced-secret entries and writes it onto the component's
 // Deployment pod-template annotations. It matches operands by the API component's
 // well-known names, so for a component without that ConfigMap+Deployment pair it
-// is a no-op. Mutating the Deployment in place is safe: the object was just
-// rendered and has not yet been applied.
-func stampConfigHash(objs []client.Object, entries []hashEntry) {
+// is a no-op beyond returning the (ConfigMap-less) hash. Mutating the Deployment
+// in place is safe: the object was just rendered and has not yet been applied.
+// The returned hash is also folded into the applied-config metric (see
+// hashConfig) so a Secret rotation or resolved-value drift shows up there too,
+// not just as a pod-template rollout.
+func stampConfigHash(objs []client.Object, entries []hashEntry) string {
 	var configYAML string
 	for _, o := range objs {
 		if cm, ok := o.(*corev1.ConfigMap); ok && cm.Name == apicomponent.ConfigMapName {
@@ -431,4 +434,5 @@ func stampConfigHash(objs []client.Object, entries []hashEntry) {
 		}
 		dep.Spec.Template.Annotations[configHashAnnotation] = hash
 	}
+	return hash
 }

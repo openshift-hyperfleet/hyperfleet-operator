@@ -7,6 +7,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 
+	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/metrics"
 )
 
@@ -55,4 +56,25 @@ func TestSameContainerImages(t *testing.T) {
 
 	g.Expect(sameContainerImages(depWithImages("a:1"), depWithImages("a:1", "b:1"))).
 		To(BeFalse(), "a differing container count is not equal")
+}
+
+// TestHashConfigCoversComponentHashesNotJustSpec verifies the applied-config
+// digest changes when a component's config-rollout hash changes (e.g. a
+// referenced Secret rotation or resolved-value drift), even though the CR spec
+// itself is unchanged. Spec-only hashing would miss exactly this case — see the
+// PR review this addresses.
+func TestHashConfigCoversComponentHashesNotJustSpec(t *testing.T) {
+	g := NewWithT(t)
+
+	spec := hyperfleetv1alpha1.HyperFleetConfigSpec{Bundle: hyperfleetv1alpha1.BundleCloudCAPI}
+
+	same := hashConfig(spec, []string{"component-hash-v1"})
+	g.Expect(hashConfig(spec, []string{"component-hash-v1"})).To(Equal(same),
+		"identical spec and component hashes must hash equally")
+
+	g.Expect(hashConfig(spec, []string{"component-hash-v2"})).NotTo(Equal(same),
+		"a changed component config hash (e.g. from a Secret rotation) must change the digest even though the spec did not")
+
+	g.Expect(hashConfig(spec, nil)).NotTo(Equal(same),
+		"a missing component hash must not collide with a present one")
 }

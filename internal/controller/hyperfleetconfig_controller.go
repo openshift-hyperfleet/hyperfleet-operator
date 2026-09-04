@@ -159,6 +159,7 @@ func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, fmt.Errorf("resolve components: %w", err)
 	}
 
+	componentConfigHashes := make([]string, 0, len(components))
 	for _, component := range components {
 		objs, err := component.Render(ctx, cr)
 		if err != nil {
@@ -167,22 +168,31 @@ func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 		// Stamp the config-hash on the component's Deployment pod template so a
 		// config or secret-value change rolls the pods. For components without a
-		// ConfigMap+Deployment pair (none today besides the API) this is a no-op.
-		stampConfigHash(objs, secretData)
-		// Detect (and count) an imminent operand rollout before applying, while the
-		// live object still reflects the previous desired state. Runs after
-		// stampConfigHash so the desired template it hashes is the final one.
-		r.recordRollouts(ctx, component.Name(), objs)
+		// ConfigMap+Deployment pair (none today besides the API) this is a no-op
+		// beyond the returned hash. The hash is also folded into the applied-config
+		// metric below, so it reflects secret/resolved-value changes too.
+		componentConfigHashes = append(componentConfigHashes, stampConfigHash(objs, secretData))
+		// Detect an imminent operand rollout before applying, while the live object
+		// still reflects the previous desired state. Runs after stampConfigHash so
+		// the desired template it hashes is the final one. The rollout counter
+		// itself is only incremented once the apply below succeeds, so a failed
+		// apply — retried on the next reconcile — is not counted as a rollout that
+		// never happened.
+		rollouts := r.detectRollouts(ctx, component.Name(), objs)
 		if err := apply.Objects(ctx, r.Client, cr, r.Scheme, objs); err != nil {
 			metrics.IncReconcileError("apply")
 			return ctrl.Result{}, fmt.Errorf("apply component %q: %w", component.Name(), err)
 		}
+		commitRollouts(rollouts)
 		// Publish operand readiness from the freshly applied state.
 		r.recordReadiness(ctx, component.Name(), objs)
 	}
 
-	// Publish the digest of the config we just applied.
-	metrics.SetAppliedConfigHash(hashConfig(cr.Spec))
+	// Publish the digest of the config we just applied: the spec plus every
+	// component's config-rollout hash, so a Secret rotation or resolved-value
+	// drift (e.g. OIDC discovery) shows up here even when the spec itself did not
+	// change.
+	metrics.SetAppliedConfigHash(hashConfig(cr.Spec, componentConfigHashes))
 
 	// TODO(HYPERFLEET-1409): roll each component's Conditions up into
 	// status.conditions and set status.observedGeneration.

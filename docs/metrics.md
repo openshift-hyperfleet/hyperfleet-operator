@@ -173,9 +173,14 @@ hyperfleet_operator_operand_rollouts_total{component="operator",version="v1.2.3"
 **Type:** Gauge (info-style, always 1)
 
 **Description:** Info metric whose `hash` label is the digest of the currently
-applied `HyperFleetConfig` spec. Exactly **one** series exists at a time: the
-collector is reset before each set, so a spec change replaces the previous series
-rather than accumulating cardinality.
+applied configuration: the `HyperFleetConfig` spec plus every component's
+config-rollout hash (rendered config content and referenced-Secret
+resourceVersions). Covering only the spec would miss a Secret rotation or a
+resolved value that never lands in the CR (e.g. OIDC JWKS discovery), either of
+which changes what is actually applied to an operand without changing the spec
+itself. Exactly **one** series exists at a time: the collector is reset before
+each set, so a change replaces the previous series rather than accumulating
+cardinality.
 
 **Labels:**
 
@@ -183,7 +188,7 @@ rather than accumulating cardinality.
 |-------|-------------|----------------|
 | `component` | Component name (const) | `operator` |
 | `version` | Application version (const) | `v1.2.3` |
-| `hash` | 12-char SHA-256 digest of the applied spec | `9f2a1c4b7d3e` |
+| `hash` | 12-char SHA-256 digest of the applied spec and component config hashes | `9f2a1c4b7d3e` |
 
 **Example output:**
 

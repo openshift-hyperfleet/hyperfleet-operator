@@ -291,8 +291,21 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 			OperatorNamespace: "does-not-exist",
 			APIImage:          apiImage,
 		}
+
+		// The Deployment among the rendered objects would detect as a create-triggered
+		// rollout, but the apply above fails before anything is persisted. The rollout
+		// counter must not advance for a rollout that never happened — otherwise a
+		// reconcile retried on every failed apply would keep double-counting it.
+		before := testutil.ToFloat64(
+			metrics.OperandRollouts.WithLabelValues(apicomponent.ComponentName, metrics.TriggerCreate))
+
 		_, err := badReconciler.Reconcile(ctx, ctrl.Request{NamespacedName: typeNamespacedName})
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("apply component"))
+
+		By("not counting a rollout for the failed apply")
+		Expect(testutil.ToFloat64(
+			metrics.OperandRollouts.WithLabelValues(apicomponent.ComponentName, metrics.TriggerCreate))).
+			To(Equal(before))
 	})
 })

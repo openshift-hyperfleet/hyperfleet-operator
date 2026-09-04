@@ -21,6 +21,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -40,18 +41,28 @@ import (
 // content into the template; this annotation already accounts for it.
 const templateHashAnnotation = "hyperfleet.redhat.com/template-hash"
 
-// hashConfig returns a short, stable digest of the applied spec. json.Marshal of a
-// Go struct is field-ordered and deterministic, so equal specs hash equally across
-// reconciles and process restarts.
-func hashConfig(spec hyperfleetv1alpha1.HyperFleetConfigSpec) string {
+// hashConfig returns a short, stable digest of the fully-applied state: the CR
+// spec plus every rendered component's config-rollout digest (see
+// computeConfigHash, returned by stampConfigHash). Spec alone is not enough — a
+// referenced Secret rotation, or a resolved value that never lands in the CR
+// (e.g. resolveJWKSURL's OIDC discovery), can change what is actually applied to
+// an operand without the spec itself changing, and this metric must reflect
+// that too. json.Marshal of a Go struct is field-ordered and deterministic, so
+// equal inputs hash equally across reconciles and process restarts.
+func hashConfig(spec hyperfleetv1alpha1.HyperFleetConfigSpec, componentConfigHashes []string) string {
 	b, err := json.Marshal(spec)
 	if err != nil {
 		// A spec that cannot be marshaled is not something the caller can act on;
-		// fall back to a sentinel so the metric still publishes a single series.
-		return "unmarshalable"
+		// fall back to a sentinel rather than fail the metric outright.
+		b = []byte("unmarshalable")
 	}
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])[:12]
+	h := sha256.New()
+	_, _ = h.Write(b)
+	for _, ch := range componentConfigHashes {
+		_, _ = h.Write([]byte{0})
+		_, _ = io.WriteString(h, ch)
+	}
+	return hex.EncodeToString(h.Sum(nil))[:12]
 }
 
 // hashPodTemplate returns a short, stable digest of a Deployment's pod template.
@@ -73,14 +84,26 @@ func stampTemplateHash(dep *appsv1.Deployment, hash string) {
 	dep.Annotations[templateHashAnnotation] = hash
 }
 
-// recordRollouts inspects each Deployment a component wants to apply and, when the
-// apply will roll the workload, increments the rollout counter with the trigger.
-// It must run BEFORE apply, while the live object still holds the previous state.
-// It also stamps the desired template hash onto the object so the apply persists
-// it. Metrics are best-effort: a read error here is logged and skipped, never
-// surfaced as a reconcile failure.
-func (r *HyperFleetConfigReconciler) recordRollouts(ctx context.Context, component string, objs []client.Object) {
+// rolloutEvent is a rollout detected by detectRollouts but not yet reported to
+// the rollout counter. Splitting detection from reporting lets the caller defer
+// metrics.IncOperandRollout until apply has actually succeeded, so a failed
+// apply — retried on the next reconcile — is not counted as a rollout that
+// never happened.
+type rolloutEvent struct {
+	component string
+	trigger   string
+}
+
+// detectRollouts inspects each Deployment a component wants to apply and reports
+// which ones the apply will roll, and why. It must run BEFORE apply, while the
+// live object still holds the previous state. It also stamps the desired
+// template hash onto the object so the apply persists it. Callers must pass the
+// returned events to commitRollouts only after apply succeeds — see that
+// function's doc comment. Detection itself is best-effort: a read error here is
+// logged and skipped, never surfaced as a reconcile failure.
+func (r *HyperFleetConfigReconciler) detectRollouts(ctx context.Context, component string, objs []client.Object) []rolloutEvent {
 	log := logf.FromContext(ctx)
+	var events []rolloutEvent
 	for _, o := range objs {
 		dep, ok := o.(*appsv1.Deployment)
 		if !ok {
@@ -93,7 +116,7 @@ func (r *HyperFleetConfigReconciler) recordRollouts(ctx context.Context, compone
 		err := r.Get(ctx, client.ObjectKeyFromObject(dep), live)
 		switch {
 		case apierrors.IsNotFound(err):
-			metrics.IncOperandRollout(component, metrics.TriggerCreate)
+			events = append(events, rolloutEvent{component: component, trigger: metrics.TriggerCreate})
 		case err != nil:
 			log.V(1).Info("skipping rollout metric: could not read live operand",
 				"component", component, "deployment", dep.Name, "error", err.Error())
@@ -103,9 +126,20 @@ func (r *HyperFleetConfigReconciler) recordRollouts(ctx context.Context, compone
 			// reconcile after upgrading to this operator version): adopt the hash
 			// silently rather than count a rollout we cannot attribute.
 			if prev != "" && prev != desired {
-				metrics.IncOperandRollout(component, rolloutTrigger(live, dep))
+				events = append(events, rolloutEvent{component: component, trigger: rolloutTrigger(live, dep)})
 			}
 		}
+	}
+	return events
+}
+
+// commitRollouts reports previously-detected rollout events to the rollout
+// counter. Call it only after the apply that carries the stamped template hash
+// has succeeded, so a failed apply (which leaves the live object's annotation
+// unchanged, and is retried on the next reconcile) is never counted.
+func commitRollouts(events []rolloutEvent) {
+	for _, e := range events {
+		metrics.IncOperandRollout(e.component, e.trigger)
 	}
 }
 
