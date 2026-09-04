@@ -62,7 +62,11 @@ spec:
         - /manager
         args:
           - --leader-elect
-          - --health-probe-bind-address=:8081
+          # HyperFleet standard: metrics on :9090 (plain HTTP, /metrics) and
+          # health/readiness on :8080, matching the other components.
+          - --health-probe-bind-address=:8080
+          - --metrics-bind-address=:9090
+          - --metrics-secure=false
         image: controller:latest
         name: manager
         env:
@@ -72,24 +76,35 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
-        ports: []
+        ports:
+        - name: metrics
+          containerPort: 9090
+          protocol: TCP
+        - name: health
+          containerPort: 8080
+          protocol: TCP
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
             drop:
             - "ALL"
+        # Probe timing follows the HyperFleet health-endpoints standard.
         livenessProbe:
           httpGet:
             path: /healthz
-            port: 8081
+            port: 8080
           initialDelaySeconds: 15
           periodSeconds: 20
+          timeoutSeconds: 5
+          failureThreshold: 3
         readinessProbe:
           httpGet:
             path: /readyz
-            port: 8081
+            port: 8080
           initialDelaySeconds: 5
           periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
         # TODO(user): Configure the resources accordingly based on the project requirements.
         # More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
         resources:
@@ -102,4 +117,4 @@ spec:
         volumeMounts: []
       volumes: []
       serviceAccountName: controller-manager
-      terminationGracePeriodSeconds: 10
+      terminationGracePeriodSeconds: 30

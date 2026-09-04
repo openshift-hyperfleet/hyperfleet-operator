@@ -33,7 +33,7 @@ metadata:
         }
       ]
     capabilities: Basic Install
-    createdAt: "2026-09-01T18:11:57Z"
+    createdAt: "2026-09-03T22:06:02Z"
     operators.operatorframework.io/builder: operator-sdk-v1.42.3
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
   name: hyperfleet-operator.v0.0.1
@@ -158,9 +158,10 @@ spec:
             spec:
               containers:
               - args:
-                - --metrics-bind-address=:8443
                 - --leader-elect
-                - --health-probe-bind-address=:8081
+                - --health-probe-bind-address=:8080
+                - --metrics-bind-address=:9090
+                - --metrics-secure=false
                 command:
                 - /manager
                 env:
@@ -172,18 +173,29 @@ spec:
                   value: quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-api:latest
                 image: quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator:latest
                 livenessProbe:
+                  failureThreshold: 3
                   httpGet:
                     path: /healthz
-                    port: 8081
+                    port: 8080
                   initialDelaySeconds: 15
                   periodSeconds: 20
+                  timeoutSeconds: 5
                 name: manager
+                ports:
+                - containerPort: 9090
+                  name: metrics
+                  protocol: TCP
+                - containerPort: 8080
+                  name: health
+                  protocol: TCP
                 readinessProbe:
+                  failureThreshold: 3
                   httpGet:
                     path: /readyz
-                    port: 8081
+                    port: 8080
                   initialDelaySeconds: 5
                   periodSeconds: 10
+                  timeoutSeconds: 3
                 resources:
                   limits:
                     cpu: 500m
@@ -201,7 +213,7 @@ spec:
                 seccompProfile:
                   type: RuntimeDefault
               serviceAccountName: hyperfleet-operator-controller-manager
-              terminationGracePeriodSeconds: 10
+              terminationGracePeriodSeconds: 30
       permissions:
       - rules:
         - apiGroups:
@@ -242,6 +254,17 @@ spec:
           verbs:
           - get
           - list
+          - watch
+        - apiGroups:
+          - monitoring.coreos.com
+          resources:
+          - servicemonitors
+          verbs:
+          - create
+          - get
+          - list
+          - patch
+          - update
           - watch
         serviceAccountName: hyperfleet-operator-controller-manager
     strategy: deployment

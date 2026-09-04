@@ -114,13 +114,53 @@ func blockDiscoveryDial(_, address string, _ syscall.RawConn) error {
 	return nil
 }
 
+// reservedDiscoveryCIDRs are non-public destination ranges the net.IP.IsXxx
+// helpers do not classify. net.IP.IsPrivate covers RFC1918 and IPv6 ULA
+// (fc00::/7) but not, notably, the shared CGNAT space (100.64.0.0/10, RFC 6598)
+// a partner-controlled issuer could use to pivot into a carrier- or
+// cloud-internal host. The remainder are IANA special-purpose ranges that are
+// never a legitimate public IdP, so blocking them costs nothing and closes the
+// gap left by relying on IsPrivate alone.
+var reservedDiscoveryCIDRs = []*net.IPNet{
+	mustCIDR("0.0.0.0/8"),       // "this host on this network" (RFC 1122)
+	mustCIDR("100.64.0.0/10"),   // shared address space / CGNAT (RFC 6598)
+	mustCIDR("192.0.0.0/24"),    // IETF protocol assignments (RFC 6890)
+	mustCIDR("192.0.2.0/24"),    // documentation TEST-NET-1 (RFC 5737)
+	mustCIDR("198.18.0.0/15"),   // benchmarking (RFC 2544)
+	mustCIDR("198.51.100.0/24"), // documentation TEST-NET-2 (RFC 5737)
+	mustCIDR("203.0.113.0/24"),  // documentation TEST-NET-3 (RFC 5737)
+	mustCIDR("240.0.0.0/4"),     // reserved / former class E (RFC 1112)
+	mustCIDR("100::/64"),        // discard-only (RFC 6666)
+	mustCIDR("2001:db8::/32"),   // documentation (RFC 3849)
+}
+
+// mustCIDR parses a CIDR literal that is a compile-time constant; a parse error
+// can only be a programming error, so it panics rather than returning one.
+func mustCIDR(s string) *net.IPNet {
+	_, n, err := net.ParseCIDR(s)
+	if err != nil {
+		panic(fmt.Sprintf("reserved discovery CIDR %q: %v", s, err))
+	}
+	return n
+}
+
 // isDisallowedDiscoveryTarget reports whether ip is a loopback, private,
-// link-local, unspecified, or multicast address — the set of destinations an
-// outbound OIDC discovery request must never reach, since spec.api.auth.issuer
-// is partner-controlled.
+// link-local, unspecified, or multicast address, or falls in one of the
+// reserved ranges above (CGNAT and other non-public IANA special-purpose
+// blocks) — the set of destinations an outbound OIDC discovery request must
+// never reach, since spec.api.auth.issuer is partner-controlled. IsPrivate
+// alone is insufficient: it does not cover CGNAT (100.64.0.0/10).
 func isDisallowedDiscoveryTarget(ip net.IP) bool {
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast()
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
+		return true
+	}
+	for _, n := range reservedDiscoveryCIDRs {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveJWKSURL returns the JWKS URL the renderer should write into config.yaml,
@@ -368,9 +408,12 @@ func computeConfigHash(configYAML string, entries []hashEntry) string {
 // ConfigMap plus the referenced-secret entries and writes it onto the component's
 // Deployment pod-template annotations. It matches operands by the API component's
 // well-known names, so for a component without that ConfigMap+Deployment pair it
-// is a no-op. Mutating the Deployment in place is safe: the object was just
-// rendered and has not yet been applied.
-func stampConfigHash(objs []client.Object, entries []hashEntry) {
+// is a no-op beyond returning the (ConfigMap-less) hash. Mutating the Deployment
+// in place is safe: the object was just rendered and has not yet been applied.
+// The returned hash is also folded into the applied-config metric (see
+// hashConfig) so a Secret rotation or resolved-value drift shows up there too,
+// not just as a pod-template rollout.
+func stampConfigHash(objs []client.Object, entries []hashEntry) string {
 	var configYAML string
 	for _, o := range objs {
 		if cm, ok := o.(*corev1.ConfigMap); ok && cm.Name == apicomponent.ConfigMapName {
@@ -391,4 +434,5 @@ func stampConfigHash(objs []client.Object, entries []hashEntry) {
 		}
 		dep.Spec.Template.Annotations[configHashAnnotation] = hash
 	}
+	return hash
 }
