@@ -33,6 +33,17 @@ metadata:
         }
       ]
     capabilities: Basic Install
+    # Conforma olm.feature_annotations_format requires all seven as string booleans.
+    # disconnected is true because relatedImages are digest-pinned. fips-compliant
+    # flips to "true" only after a verified FIPS build. HYPERFLEET-1614.
+    features.operators.openshift.io/disconnected: "true"
+    features.operators.openshift.io/fips-compliant: "false"
+    features.operators.openshift.io/proxy-aware: "false"
+    features.operators.openshift.io/tls-profiles: "false"
+    features.operators.openshift.io/token-auth-aws: "false"
+    features.operators.openshift.io/token-auth-azure: "false"
+    features.operators.openshift.io/token-auth-gcp: "false"
+    operators.openshift.io/valid-subscription: '["OpenShift Container Platform"]'
   name: hyperfleet-operator.v0.0.0
   namespace: placeholder
 spec:

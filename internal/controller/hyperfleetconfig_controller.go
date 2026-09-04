@@ -88,6 +88,7 @@ type HyperFleetConfigReconciler struct {
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups="",resources=services;serviceaccounts;configmaps,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete,namespace=hyperfleet-system
 // Secrets are referenced (not owned): the operator reads partner-provided
 // database/TLS/JWKS Secrets to compute the config-rollout hash and watches them
 // so a rotation re-triggers reconcile. get;list;watch only — the operator never
