@@ -33,7 +33,15 @@ metadata:
         }
       ]
     capabilities: Basic Install
-    createdAt: "2026-09-01T18:11:57Z"
+    createdAt: "2026-09-04T09:48:43Z"
+    features.operators.openshift.io/disconnected: "true"
+    features.operators.openshift.io/fips-compliant: "false"
+    features.operators.openshift.io/proxy-aware: "false"
+    features.operators.openshift.io/tls-profiles: "false"
+    features.operators.openshift.io/token-auth-aws: "false"
+    features.operators.openshift.io/token-auth-azure: "false"
+    features.operators.openshift.io/token-auth-gcp: "false"
+    operators.openshift.io/valid-subscription: '["OpenShift Container Platform"]'
     operators.operatorframework.io/builder: operator-sdk-v1.42.3
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
   name: hyperfleet-operator.v0.0.1
@@ -242,6 +250,18 @@ spec:
           verbs:
           - get
           - list
+          - watch
+        - apiGroups:
+          - networking.k8s.io
+          resources:
+          - networkpolicies
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
           - watch
         serviceAccountName: hyperfleet-operator-controller-manager
     strategy: deployment

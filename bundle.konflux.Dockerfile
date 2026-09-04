@@ -9,10 +9,10 @@ RUN microdnf install -y tar gzip && \
 FROM builder-runner AS builder
 # Hack to set the operator container image in the deployment
 # Konflux nudges update these variables with the latest digest-pinned pullspecs.
-ARG HYPERFLEET_OPERATOR_IMAGE_PULLSPEC="quay.io/redhat-user-workloads/hyperfleet-tenant/hyperfleet/hyperfleet-operator@sha256:31e365d312b6f3d483913d4029eba565abd64ab38a6d117658324afe225f708d"
+ARG HYPERFLEET_OPERATOR_IMAGE_PULLSPEC="quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator@sha256:31e365d312b6f3d483913d4029eba565abd64ab38a6d117658324afe225f708d"
 ENV HYPERFLEET_OPERATOR_IMAGE_PULLSPEC=${HYPERFLEET_OPERATOR_IMAGE_PULLSPEC}
 
-ARG HYPERFLEET_API_IMAGE_PULLSPEC="quay.io/redhat-user-workloads/hyperfleet-tenant/hyperfleet/hyperfleet-api@sha256:8533d0d875480f31f5112e454659a095a5d2e993c139a9045a06be6b67b829ca"
+ARG HYPERFLEET_API_IMAGE_PULLSPEC="quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-api@sha256:8533d0d875480f31f5112e454659a095a5d2e993c139a9045a06be6b67b829ca"
 ENV HYPERFLEET_API_IMAGE_PULLSPEC=${HYPERFLEET_API_IMAGE_PULLSPEC}
 
 COPY bundle-hack .
@@ -48,4 +48,10 @@ LABEL name="hyperfleet-operator-bundle" \
       vendor="Red Hat, Inc." \
       version="${APP_VERSION}" \
       summary="OLM bundle for the HyperFleet Operator" \
-      description="OLM bundle for the HyperFleet Operator, which installs and manages HyperFleet."
+      description="OLM bundle for the HyperFleet Operator, which installs and manages HyperFleet." \
+      com.redhat.component="hyperfleet-operator-bundle-container" \
+      io.k8s.description="OLM bundle for the HyperFleet Operator, which installs and manages HyperFleet." \
+      distribution-scope="public" \
+      release="1" \
+      url="https://github.com/openshift-hyperfleet/hyperfleet-operator" \
+      maintainer="Red Hat HyperFleet Team"
