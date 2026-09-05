@@ -84,8 +84,7 @@ var AllSizingProfiles = []SizingProfile{SizingProfileSmall, SizingProfileMedium,
 // operator-layer vocabulary describing installation health, and is distinct from
 // the HyperFleet API's own resource-condition vocabulary (Available/Ready/
 // Reconciled/LastKnownReconciled/per-adapter; see architecture ADR-0007 and
-// ADR-0008). The bundle controller (HYPERFLEET-1409) populates these; this story
-// defines the schema only.
+// ADR-0008). Populated by the bundle controller as of HYPERFLEET-1409.
 const (
 	// ConditionAvailable is True when the installed operand (the API) is
 	// deployed and healthy.
@@ -98,16 +97,50 @@ const (
 	ConditionDegraded = "Degraded"
 )
 
+// Reason strings for the operator-layer conditions above (HYPERFLEET-1409).
+// These are published API vocabulary — partners may read status.conditions[].reason
+// — so every writer of a condition must use one of these constants rather than an
+// ad hoc string, and the set must stay documented in docs/status-conditions.md.
+const (
+	// ReasonDeploymentAvailable: Available=True — the operand Deployment reports
+	// Available and all desired replicas are ready.
+	ReasonDeploymentAvailable = "DeploymentAvailable"
+	// ReasonDeploymentUnavailable: Available=False — the operand Deployment is
+	// missing or has zero available replicas.
+	ReasonDeploymentUnavailable = "DeploymentUnavailable"
+	// ReasonDeploymentNotReady: Available=False — the operand Deployment exists
+	// with some, but not all, replicas ready.
+	ReasonDeploymentNotReady = "DeploymentNotReady"
+	// ReasonRolloutInProgress: Progressing=True — the operand Deployment has not
+	// finished rolling out its current generation.
+	ReasonRolloutInProgress = "RolloutInProgress"
+	// ReasonRolloutComplete: Progressing=False — the operand Deployment is fully
+	// rolled out and stable.
+	ReasonRolloutComplete = "RolloutComplete"
+	// ReasonAsExpected: Degraded=False — no failure signal (ClusterOperator
+	// convention default).
+	ReasonAsExpected = "AsExpected"
+	// ReasonReferencedSecretMissing: Degraded=True — a Secret referenced by the
+	// spec (database, TLS, or JWKS) does not exist in the operator's namespace.
+	ReasonReferencedSecretMissing = "ReferencedSecretMissing"
+	// ReasonReconcileError: Degraded=True — a component failed to render or
+	// apply, or JWKS discovery failed with no cached fallback available, during
+	// the most recent reconcile.
+	ReasonReconcileError = "ReconcileError"
+)
+
 // SecretReference references a Secret by name. Referenced Secrets must live in
 // the operator's own namespace: because HyperFleetConfig is cluster-scoped, no
 // namespace field is exposed (name-only + operator-namespace convention, decided
 // in the HYPERFLEET-1406 API review).
 //
-// TODO(HYPERFLEET-1512): the operator-namespace constraint is convention-only
-// today — the schema cannot enforce it (CEL sees no cross-object/namespace
-// state; ADR-0019 rules out webhooks). The reconciler must enforce it (resolve
-// the Secret in the operator's own namespace and surface a Degraded condition
-// when it is missing) once it lands.
+// The operator-namespace constraint is convention-only at the schema level —
+// CEL sees no cross-object/namespace state, and ADR-0019 rules out webhooks —
+// but the reconciler does resolve every reference in its own namespace
+// (referencedSecretData) and surfaces ConditionDegraded /
+// ReasonReferencedSecretMissing when one is absent (HYPERFLEET-1409).
+// TODO(HYPERFLEET-1512): decide whether any further enforcement (e.g. rejecting
+// reconciliation outright) belongs here.
 type SecretReference struct {
 	// name is the name of the Secret in the operator's namespace. It must be a
 	// valid DNS-1123 subdomain, matching what k8s.io/apimachinery/pkg/util/validation
@@ -255,8 +288,9 @@ type HyperFleetConfigSpec struct {
 }
 
 // HyperFleetConfigStatus defines the observed state of HyperFleetConfig. It is
-// populated by the bundle controller in later stories; this story defines the
-// schema only.
+// populated by the bundle controller after every reconcile (HYPERFLEET-1409),
+// rolling up each component's health into the Available/Progressing/Degraded
+// conditions.
 type HyperFleetConfigStatus struct {
 	// observedGeneration is the .metadata.generation the operator last acted on.
 	//
@@ -280,6 +314,8 @@ type HyperFleetConfigStatus struct {
 // +kubebuilder:printcolumn:name="Bundle",type=string,JSONPath=`.spec.bundle`
 // +kubebuilder:printcolumn:name="Profile",type=string,JSONPath=`.spec.api.profile`
 // +kubebuilder:printcolumn:name="Available",type=string,JSONPath=`.status.conditions[?(@.type=="Available")].status`
+// +kubebuilder:printcolumn:name="Progressing",type=string,JSONPath=`.status.conditions[?(@.type=="Progressing")].status`
+// +kubebuilder:printcolumn:name="Degraded",type=string,JSONPath=`.status.conditions[?(@.type=="Degraded")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // HyperFleetConfig is the Schema for the hyperfleetconfigs API. It is a

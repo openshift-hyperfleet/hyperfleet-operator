@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 
+	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -161,11 +162,117 @@ func (c *Component) resolveJWKSource(cr *hyperfleetv1alpha1.HyperFleetConfig) (u
 	return c.ResolvedJWKSURL, ""
 }
 
-// Conditions reports the component's health as metav1.Conditions. The contract is
-// defined now (HYPERFLEET-1407) so it need not be reopened next story, but its
-// output is not yet rolled up into status.conditions — real health derivation and
-// status wiring land in HYPERFLEET-1409. Returning nil until then keeps the
-// reconciler from writing status prematurely.
-func (c *Component) Conditions(_ context.Context, _ *hyperfleetv1alpha1.HyperFleetConfig) ([]metav1.Condition, error) {
-	return nil, nil
+// Conditions reports the component's health as metav1.Conditions, derived from
+// the live state of the Deployment Render produced (already updated in place by
+// apply.Objects with the server's current status — see bundle.Component). It
+// never reads the cluster itself.
+//
+// Available reflects whether the Deployment is up: True only once all desired
+// replicas are ready, distinguishing "not present at all" (DeploymentUnavailable)
+// from "up but partially ready" (DeploymentNotReady). Progressing is derived from
+// replica-count/generation lag rather than trusting the Deployment's own
+// "Progressing" condition Reason verbatim, since that built-in condition stays
+// True/NewReplicaSetAvailable even at steady state, which is not what
+// HyperFleetConfig's Progressing means.
+func (c *Component) Conditions(_ context.Context, _ *hyperfleetv1alpha1.HyperFleetConfig, applied []client.Object) ([]metav1.Condition, error) {
+	dep := findDeployment(applied)
+	return []metav1.Condition{
+		availableCondition(dep),
+		progressingCondition(dep),
+	}, nil
+}
+
+// findDeployment returns the API Deployment from applied, or nil if absent.
+func findDeployment(applied []client.Object) *appsv1.Deployment {
+	for _, o := range applied {
+		if dep, ok := o.(*appsv1.Deployment); ok && dep.Name == ResourceName {
+			return dep
+		}
+	}
+	return nil
+}
+
+// desiredReplicas returns dep.Spec.Replicas, defaulting to 1 to match
+// render.go's current fixed baseline (Replicas is not yet configurable).
+func desiredReplicas(dep *appsv1.Deployment) int32 {
+	if dep.Spec.Replicas != nil {
+		return *dep.Spec.Replicas
+	}
+	return 1
+}
+
+// availableCondition derives Available from the Deployment's replica counts.
+func availableCondition(dep *appsv1.Deployment) metav1.Condition {
+	if dep == nil {
+		return metav1.Condition{
+			Type:    hyperfleetv1alpha1.ConditionAvailable,
+			Status:  metav1.ConditionFalse,
+			Reason:  hyperfleetv1alpha1.ReasonDeploymentUnavailable,
+			Message: "the API Deployment does not exist",
+		}
+	}
+
+	desired := desiredReplicas(dep)
+
+	switch {
+	case desired == 0:
+		return metav1.Condition{
+			Type:    hyperfleetv1alpha1.ConditionAvailable,
+			Status:  metav1.ConditionTrue,
+			Reason:  hyperfleetv1alpha1.ReasonDeploymentAvailable,
+			Message: "the API Deployment is scaled to zero",
+		}
+	case dep.Status.AvailableReplicas == 0:
+		return metav1.Condition{
+			Type:    hyperfleetv1alpha1.ConditionAvailable,
+			Status:  metav1.ConditionFalse,
+			Reason:  hyperfleetv1alpha1.ReasonDeploymentUnavailable,
+			Message: "the API Deployment has no available replicas",
+		}
+	case dep.Status.AvailableReplicas < desired:
+		return metav1.Condition{
+			Type:    hyperfleetv1alpha1.ConditionAvailable,
+			Status:  metav1.ConditionFalse,
+			Reason:  hyperfleetv1alpha1.ReasonDeploymentNotReady,
+			Message: fmt.Sprintf("the API Deployment has %d/%d replicas available", dep.Status.AvailableReplicas, desired),
+		}
+	default:
+		return metav1.Condition{
+			Type:    hyperfleetv1alpha1.ConditionAvailable,
+			Status:  metav1.ConditionTrue,
+			Reason:  hyperfleetv1alpha1.ReasonDeploymentAvailable,
+			Message: "the API Deployment is available",
+		}
+	}
+}
+
+// progressingCondition derives Progressing from replica-count and generation
+// lag: the Deployment has not caught up with its most recently observed
+// generation, or not all replicas have been updated to the current template.
+func progressingCondition(dep *appsv1.Deployment) metav1.Condition {
+	if dep == nil {
+		return metav1.Condition{
+			Type:    hyperfleetv1alpha1.ConditionProgressing,
+			Status:  metav1.ConditionTrue,
+			Reason:  hyperfleetv1alpha1.ReasonRolloutInProgress,
+			Message: "the API Deployment does not exist yet",
+		}
+	}
+
+	desired := desiredReplicas(dep)
+
+	if dep.Status.ObservedGeneration < dep.Generation || dep.Status.UpdatedReplicas < desired {
+		return metav1.Condition{
+			Type:    hyperfleetv1alpha1.ConditionProgressing,
+			Status:  metav1.ConditionTrue,
+			Reason:  hyperfleetv1alpha1.ReasonRolloutInProgress,
+			Message: "the API Deployment rollout has not completed",
+		}
+	}
+	return metav1.Condition{
+		Type:    hyperfleetv1alpha1.ConditionProgressing,
+		Status:  metav1.ConditionFalse,
+		Reason:  hyperfleetv1alpha1.ReasonRolloutComplete,
+		Message: "the API Deployment rollout is complete",
+	}
 }
