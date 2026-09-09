@@ -366,18 +366,29 @@ bundle-override-img: manifests operator-sdk ## Generate bundle with IMG override
 
 .PHONY: bundle-build
 bundle-build: ## Build the bundle image.
-	$(CONTAINER_TOOL) build -f bundle.Dockerfile -t $(BUNDLE_IMG) .
+	$(CONTAINER_TOOL) build --platform=$(PLATFORM) -f bundle.Dockerfile -t $(BUNDLE_IMG) .
 
 .PHONY: bundle-push
 bundle-push: ## Push the bundle image.
 	$(MAKE) docker-push IMG=$(BUNDLE_IMG)
 
-# Build a catalog image by adding bundle images to an empty catalog using the operator package manager tool, 'opm'.
-# This recipe invokes 'opm' in 'semver' bundle add mode. For more information on add modes, see:
-# https://github.com/operator-framework/community-operators/blob/7f1438c/docs/packaging-operator.md#updating-your-existing-operator
+TEMPLATEFILE ?= dev-template.yaml
+.PHONY: catalog-template-update-bundle-img
+catalog-template-update-bundle-img: ## Update the bundle image in the TEMPLATEFILE
+	@if [ ! -f catalog/$(TEMPLATEFILE) ]; then \
+		echo "Error: Template file catalog/$(TEMPLATEFILE) does not exist"; \
+		exit 1; \
+	fi
+	@sed -i.bak 's|image: .*|image: $(BUNDLE_IMG)|' catalog/$(TEMPLATEFILE) && rm catalog/$(TEMPLATEFILE).bak
+	@echo "Updated catalog/$(TEMPLATEFILE) with image: $(BUNDLE_IMG)"
+
 .PHONY: catalog-build
-catalog-build: opm ## Build a catalog image.
-	$(OPM) index add --container-tool $(CONTAINER_TOOL) --mode semver --tag $(CATALOG_IMG) --bundles $(BUNDLE_IMGS) $(FROM_INDEX_OPT)
+catalog-build: ## Build the catalog image with TEMPLATEFILE overrides 
+	$(CONTAINER_TOOL) build \
+		-f catalog.Dockerfile \
+		--platform $(PLATFORM) \
+		--build-arg TEMPLATEFILE=$(TEMPLATEFILE) \
+		-t $(CATALOG_IMG) .
 
 # Push the catalog image.
 .PHONY: catalog-push
