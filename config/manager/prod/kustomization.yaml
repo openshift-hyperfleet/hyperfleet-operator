@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Konflux nudges update the digest-pinned pullspecs in this file.
+
+resources:
+- manager.yaml
+
+images:
+- name: controller
+  newName: quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator
+  digest: sha256:7504189fc375ee65457baa568487b9f083b35b882d58601cd4f4ad8ee50e639e
+
+patches:
+- patch: |-
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: RELATED_IMAGE_HYPERFLEET_API
+        value: quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-api@sha256:99f8cdda580069de21ba0e13b5b171cf82b81b93dc88b12bcaa8294e72e84fc3
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: RELATED_IMAGE_HYPERFLEET_OPERATOR
+        value: quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator@sha256:7504189fc375ee65457baa568487b9f083b35b882d58601cd4f4ad8ee50e639e
+  target:
+    kind: Deployment
+    name: controller-manager

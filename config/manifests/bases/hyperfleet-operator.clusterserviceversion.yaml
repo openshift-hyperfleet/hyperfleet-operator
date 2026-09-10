@@ -33,9 +33,6 @@ metadata:
         }
       ]
     capabilities: Basic Install
-    # Conforma olm.feature_annotations_format requires all seven as string booleans.
-    # disconnected is true because relatedImages are digest-pinned. fips-compliant
-    # flips to "true" only after a verified FIPS build. HYPERFLEET-1614.
     features.operators.openshift.io/disconnected: "true"
     features.operators.openshift.io/fips-compliant: "false"
     features.operators.openshift.io/proxy-aware: "false"
@@ -88,4 +85,9 @@ spec:
   provider:
     name: Red Hat
     url: https://github.com/openshift-hyperfleet
+  relatedImages:
+  - image: ""
+    name: hyperfleet-api
+  - image: ""
+    name: hyperfleet-operator
   version: 0.0.0
