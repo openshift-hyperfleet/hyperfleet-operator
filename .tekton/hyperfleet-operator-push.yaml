@@ -2,7 +2,7 @@ apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
   annotations:
-    build.appstudio.openshift.io/build-nudge-files: bundle.konflux.Dockerfile
+    build.appstudio.openshift.io/build-nudge-files: config/manager/prod/kustomization.yaml
     build.appstudio.openshift.io/repo: https://github.com/openshift-hyperfleet/hyperfleet-operator?rev={{revision}}
     build.appstudio.redhat.com/commit_sha: '{{revision}}'
     build.appstudio.redhat.com/target_branch: '{{target_branch}}'
@@ -12,10 +12,7 @@ metadata:
       event == "push"
       && target_branch == "main"
       && !(files.all.all(x,
-           x.matches('^bundle\\.konflux\\.Dockerfile$')
-           || x.matches('^bundle\\.Dockerfile$')
-           || x.matches('^bundle-hack/')
-           || x.matches('^bundle/')
+           x.matches('^bundle\\.Dockerfile$')
            || x.matches('^\\.tekton/hyperfleet-operator-bundle-push\\.yaml$')
          ))
   labels:
