@@ -44,7 +44,7 @@ export IMG=quay.io/$QUAY_USER/hyperfleet-operator:dev-<git-sha>
 **Image path defaults:**
 - IMG (hyperfleet-operator image): `quay.io/$QUAY_USER/hyperfleet-operator:dev-<git-sha>` (defaults `make image-dev`)
 - BUNDLE_IMG (hyperfleet-operator-bundle): `quay.io/$QUAY_USER/hyperfleet-operator-bundle:v$(VERSION)` (default VERSION=0.0.1)
-- CATALOG_IMG (hyperfleet-operator-catalog): `quay.io/$QUAY_USER/hyperfleet-operator-bundle:v$(VERSION)` (defaul VERSION=0.0.1)
+- CATALOG_IMG (hyperfleet-operator-catalog): `quay.io/$QUAY_USER/hyperfleet-operator-catalog:v$(VERSION)` (defaul VERSION=0.0.1)
 
 ### OLM Installation (Bundle + Catalog) - OLM Classic V0
 Testing hyperfleet-operator installation with OLM using a catalog image.
