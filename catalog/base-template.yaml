@@ -1,0 +1,14 @@
+---
+schema: olm.template.basic
+entries:
+  - schema: olm.package
+    name: hyperfleet-operator
+    defaultChannel: stable
+    description: "HyperFleet Operator"
+  - schema: olm.channel
+    name: stable
+    package: hyperfleet-operator
+    entries:
+      - name: hyperfleet-operator.v0.0.1
+        skipRange: "<0.0.1"
+# Dockerfile will concatenate the olm.bundle entry depending on the environment

@@ -1,0 +1,4 @@
+# Modify this file to override the operator-bundle image used in your catalog testing
+# For dev purposes when testing changes and using catalog installation
+  - schema: olm.bundle
+    image: OVERRIDE_BUNDLE_IMAGE
