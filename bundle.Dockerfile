@@ -8,16 +8,7 @@ RUN cp /workdir/config/manager/${KUSTOMIZE_VARIANT} \
        /workdir/config/manager/kustomization.yaml && \
     kustomize build /workdir/config/manifests > /workdir/manifests.yaml
 
-FROM alpine:3.20 AS operator
-
-ARG OPERATOR_SDK_VERSION=v1.42.3
-ARG ARCH=amd64
-
-RUN apk add --no-cache curl && \
-    curl -fsSLo /usr/local/bin/operator-sdk \
-      "https://github.com/operator-framework/operator-sdk/releases/download/${OPERATOR_SDK_VERSION}/operator-sdk_linux_${ARCH}" && \
-    chmod +x /usr/local/bin/operator-sdk
-
+FROM quay.io/operator-framework/operator-sdk:v1.42.3 AS operator
 COPY --from=kustomize /workdir/manifests.yaml /workdir/manifests.yaml
 ARG CHANNELS=stable
 ARG VERSION=0.0.1
