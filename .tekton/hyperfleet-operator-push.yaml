@@ -14,8 +14,9 @@ metadata:
       && !(files.all.all(x,
            x.matches('^bundle\\.konflux\\.Dockerfile$')
            || x.matches('^bundle\\.Dockerfile$')
-           || x.matches('^bundle-hack/')
+           || x.matches('^hack/bundle/')
            || x.matches('^bundle/')
+           || x.matches('^hack/test-disconnected-mirror\\.sh$')
            || x.matches('^\\.tekton/hyperfleet-operator-bundle-push\\.yaml$')
          ))
   labels:

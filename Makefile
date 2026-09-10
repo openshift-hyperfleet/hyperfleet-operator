@@ -120,9 +120,22 @@ cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 
 ##@ Lint
 
+.PHONY: verify-related-images
+verify-related-images: ## Verify a final built bundle CSV (CSV_FILE is required).
+	@test -n "$(CSV_FILE)" || { echo "Set CSV_FILE to the CSV extracted from the built bundle"; exit 1; }
+	go run ./hack/verify-related-images -csv "$(CSV_FILE)"
+
 .PHONY: lint
-lint: ## Run golangci-lint linter
+lint: verify-bundle-related-images ## Check bundle image metadata and run golangci-lint.
 	$(GOLANGCI_LINT) run
+
+.PHONY: verify-bundle-related-images
+verify-bundle-related-images: ## Transform the repository bundle CSV and verify its related images.
+	@set -euo pipefail; \
+	yq_path=$$($(call gotool,-n yq)); \
+	YQ="$$yq_path" bash ./hack/verify-bundle-related-images.sh; \
+	PATH="$$(dirname "$$yq_path"):$$PATH" go test -tags integration ./hack/verify-related-images; \
+	YQ="$$yq_path" bash ./hack/test-verify-bundle-related-images.sh
 
 .PHONY: lint-fix
 lint-fix: ## Run golangci-lint linter and perform fixes
@@ -133,6 +146,23 @@ lint-config: ## Verify golangci-lint linter configuration
 	$(GOLANGCI_LINT) config verify
 
 ##@ Build
+
+OC_MIRROR_IMAGE ?= hyperfleet-oc-mirror:local
+# Disposable destination registry used only by test-disconnected-mirror to
+# simulate the disconnected mirror; it is not the source or production registry.
+REGISTRY_IMAGE ?= docker.io/library/registry@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+
+.PHONY: build-oc-mirror-image
+build-oc-mirror-image: check-container-tool ## Build the containerized oc-mirror runner.
+	"$(CONTAINER_TOOL)" build --platform "$(PLATFORM)" -f hack/oc-mirror.Dockerfile -t "$(OC_MIRROR_IMAGE)" .
+
+.PHONY: test-disconnected-mirror
+test-disconnected-mirror: build-oc-mirror-image ## Test catalog archive import using a catalog archive (no cluster install).
+	"$(CONTAINER_TOOL)" pull --platform "$(PLATFORM)" "$(REGISTRY_IMAGE)"
+	CONTAINER_TOOL="$(CONTAINER_TOOL)" OC_MIRROR_IMAGE="$(OC_MIRROR_IMAGE)" \
+		CATALOG_IMG="$(CATALOG_IMG)" \
+		REGISTRY_IMAGE="$(REGISTRY_IMAGE)" REGISTRY_AUTH_FILE="$(REGISTRY_AUTH_FILE)" CONTAINER_DNS="$(CONTAINER_DNS)" MIRROR_PLATFORM="$(PLATFORM)" \
+		./hack/test-disconnected-mirror.sh
 
 .PHONY: build
 build: manifests generate fmt vet ## Build manager binary.
@@ -169,7 +199,7 @@ GIT_DIRTY ?= $(shell [ -z "$$(git status --porcelain 2>/dev/null)" ] || echo "-m
 
 # Go build flags (FIPS compliant)
 CGO_ENABLED ?= 1
-GOEXPERIMENT ?= boringcrypto 
+GOEXPERIMENT ?= boringcrypto
 GOFLAGS ?= -trimpath
 # LDFLAGS := -s -w \
 #            -X github.com/openshift-hyperfleet/hyperfleet-operator/pkg/version.Version=$(APP_VERSION) \
@@ -283,7 +313,7 @@ undeploy: ## Undeploy controller from the K8s cluster specified in ~/.kube/confi
 # Generates dist/install.yaml
 # Install resources
 # kubectl apply -f dist/install.yaml
-# Uninstall resources 
+# Uninstall resources
 # kubectl delete -f dist/install.yaml
 # For image overrides edit config/manager/kustomization.yaml
 .PHONY: build-deployer
@@ -383,7 +413,6 @@ catalog-build: opm ## Build a catalog image.
 .PHONY: catalog-push
 catalog-push: ## Push a catalog image.
 	$(MAKE) docker-push IMG=$(CATALOG_IMG)
-
 
 ##@ Dependencies
 

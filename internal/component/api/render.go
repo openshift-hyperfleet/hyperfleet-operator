@@ -243,9 +243,10 @@ func deployment(cr *hyperfleetv1alpha1.HyperFleetConfig, image, namespace string
 					ServiceAccountName:            ResourceName,
 					TerminationGracePeriodSeconds: ptr.To[int64](70),
 					SecurityContext: &corev1.PodSecurityContext{
+						// Do not set a fixed UID or fsGroup. OpenShift's restricted SCC
+						// assigns values from the project's allocated range, while the
+						// image remains required to run as non-root on every platform.
 						RunAsNonRoot: ptr.To(true),
-						RunAsUser:    ptr.To[int64](65532),
-						FSGroup:      ptr.To[int64](65532),
 					},
 					Containers: []corev1.Container{{
 						Name:            ResourceName,

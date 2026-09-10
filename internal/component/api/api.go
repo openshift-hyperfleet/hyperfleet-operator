@@ -26,30 +26,13 @@ import (
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
 )
 
-// DefaultImage is the compiled-in fallback image used when the operator is not
-// given RELATED_IMAGE_HYPERFLEET_API. Production deployments override it with a
-// digest-pinned image via that env var (OLM relatedImages convention).
-//
-// Must be v0.3.0 or later: config.yaml renders entities (pkg/registry) and the
-// multi-issuer server.jwt.configs list, neither of which exist in v0.2.x's
-// config schema — the API's loader uses viper's UnmarshalExact, so a v0.2.x
-// binary rejects this config and crash-loops at startup (verified field-for-field
-// against hyperfleet-api's pkg/config/server.go and pkg/registry at each tag;
-// see PR #6 review discussion).
-//
-// Pinned to 0.4.0 specifically because it also carries
-// HYPERFLEET-1603 (hyperfleet-api#364, merged to main 2026-09-01): database
-// credentials via HYPERFLEET_DATABASE_*_FILE (ResolveFileOverrides in
-// pkg/config/db.go) — verified field-for-field present at the v0.4.0 git tag.
-//
-// Registry is redhat-services-prod, not openshift-hyperfleet: hyperfleet-api's
-// Konflux pipelines (.tekton/hyperfleet-api-{push,tag}.yaml) publish only to
-// the redhat-user-workloads staging tenant; a separate Konflux Release step
-// promotes to redhat-services-prod, which is what actually carries a signed,
-// pullable 0.4.0 tag (verified against quay.io's tag API — the tag has no "v"
-// prefix there, unlike the hyperfleet-api git tag). openshift-hyperfleet/hyperfleet-api
-// is a legacy pre-Konflux registry that stopped receiving pushes after v0.2.1
-// and never got a v0.4.0 image at all (PR #6 review comment r3905519856).
+// RelatedImageEnv is the release image override supplied by the bundle CSV.
+const RelatedImageEnv = "RELATED_IMAGE_HYPERFLEET_API"
+
+// DefaultImage is the compatibility fallback for development without an image
+// override. Konflux sets RelatedImageEnv in release bundles independently of this
+// fallback. The API must support the rendered entity/JWT config and database
+// HYPERFLEET_DATABASE_*_FILE variables (v0.4.0+).
 const DefaultImage = "quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-api:0.4.0"
 
 // Component renders the HyperFleet API operand. It satisfies the bundle.Component

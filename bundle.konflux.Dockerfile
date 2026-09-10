@@ -1,10 +1,12 @@
-# Konflux bundle image build. Unlike the auto-generated bundle.Dockerfile (used
-# for local dev with operator-sdk), this runs bundle-hack/update_bundle.sh to
+# Konflux bundle image build. Unlike the auto-generated bundle.Dockerfile used
+# for local development, this runs hack/bundle/update_bundle.sh to
 # patch digest-pinned image references into the CSV at build time.
 FROM registry.access.redhat.com/ubi9/ubi-minimal:latest AS builder-runner
 RUN microdnf install -y tar gzip && \
-    curl -sL https://github.com/mikefarah/yq/releases/download/v4.44.1/yq_linux_amd64.tar.gz | tar xz && \
-    mv yq_linux_amd64 /usr/bin/yq
+    curl -fsSLo /tmp/yq.tar.gz https://github.com/mikefarah/yq/releases/download/v4.44.1/yq_linux_amd64.tar.gz && \
+    tar -xzf /tmp/yq.tar.gz && \
+    mv yq_linux_amd64 /usr/bin/yq && \
+    rm /tmp/yq.tar.gz
 
 FROM builder-runner AS builder
 # Hack to set the operator container image in the deployment
@@ -15,7 +17,7 @@ ENV HYPERFLEET_OPERATOR_IMAGE_PULLSPEC=${HYPERFLEET_OPERATOR_IMAGE_PULLSPEC}
 ARG HYPERFLEET_API_IMAGE_PULLSPEC="quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-api@sha256:99f8cdda580069de21ba0e13b5b171cf82b81b93dc88b12bcaa8294e72e84fc3"
 ENV HYPERFLEET_API_IMAGE_PULLSPEC=${HYPERFLEET_API_IMAGE_PULLSPEC}
 
-COPY bundle-hack .
+COPY hack/bundle .
 COPY bundle/manifests /manifests/
 
 RUN ./update_bundle.sh
