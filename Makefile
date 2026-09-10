@@ -278,7 +278,6 @@ undeploy: ## Undeploy controller from the K8s cluster specified in ~/.kube/confi
 
 ##@ Bundles/Catalog
 
-
 # Non-olm installs
 # Generates dist/install.yaml
 # Install resources
@@ -349,24 +348,19 @@ ifneq ($(origin CATALOG_BASE_IMG), undefined)
 FROM_INDEX_OPT := --from-index $(CATALOG_BASE_IMG)
 endif
 
-.PHONY: bundle
-bundle: manifests operator-sdk ## Generate bundle manifests and metadata, then validate generated files.
-	$(OPERATOR_SDK) generate kustomize manifests -q
-	$(KUSTOMIZE) build config/manifests | $(OPERATOR_SDK) generate bundle $(BUNDLE_GEN_FLAGS)
-	$(OPERATOR_SDK) bundle validate ./bundle
-
 .PHONY: bundle-override-img
 bundle-override-img: manifests operator-sdk ## Generate bundle with IMG override, then restore kustomization.yaml
 	$(OPERATOR_SDK) generate kustomize manifests -q
-	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG)
-	$(KUSTOMIZE) build config/manifests | $(OPERATOR_SDK) generate bundle $(BUNDLE_GEN_FLAGS)
-	$(OPERATOR_SDK) bundle validate ./bundle
-	@echo "Bundle generated with IMG=$(IMG)"
-	@echo "Note: config/manager/kustomization.yaml has been modified. Commit or reset as needed."
+	cd config/manager/dev && $(KUSTOMIZE) edit set image controller=$(IMG)
 
 .PHONY: bundle-build
-bundle-build: ## Build the bundle image.
-	$(CONTAINER_TOOL) build -f bundle.Dockerfile -t $(BUNDLE_IMG) .
+bundle-build: ## Builds the bundle and bundle image.
+	$(CONTAINER_TOOL) build -f bundle.Dockerfile \
+		--platform $(PLATFORM) \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg CHANNEL=$(CHANNELS) \
+		--build-arg APP_VERSION=$(APP_VERSION) \
+		-t $(BUNDLE_IMG) .
 
 .PHONY: bundle-push
 bundle-push: ## Push the bundle image.

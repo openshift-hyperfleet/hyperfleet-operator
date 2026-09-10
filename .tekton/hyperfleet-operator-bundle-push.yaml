@@ -8,8 +8,7 @@ metadata:
     pipelinesascode.tekton.dev/cancel-in-progress: "false"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
     pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch
-      == "main" && ( ".tekton/hyperfleet-operator-bundle-push.yaml".pathChanged() || "bundle.konflux.Dockerfile".pathChanged()
-      || "bundle-hack/***".pathChanged() || "bundle/***".pathChanged() )
+      == "main" && ( ".tekton/hyperfleet-operator-bundle-push.yaml".pathChanged() || "bundle.Dockerfile".pathChanged())
   labels:
     appstudio.openshift.io/application: hyperfleet
     appstudio.openshift.io/component: hyperfleet-operator-bundle
@@ -25,7 +24,7 @@ spec:
   - name: output-image
     value: quay.io/redhat-user-workloads/hyperfleet-tenant/hyperfleet/hyperfleet-operator-bundle:{{revision}}
   - name: dockerfile
-    value: ./bundle.konflux.Dockerfile
+    value: ./bundle.Dockerfile
   - name: path-context
     value: .
   pipelineSpec:
@@ -222,6 +221,7 @@ spec:
         value: $(tasks.clone-repository.results.commit)
       - name: BUILD_ARGS
         value:
+        - KUSTOMIZE_VARIANT=config/manager/prod/kustomization.yaml
         - $(params.build-args[*])
       - name: BUILD_ARGS_FILE
         value: $(params.build-args-file)
