@@ -21,6 +21,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -32,6 +33,7 @@ import (
 
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
 	apicomponent "github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/api"
+	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/metrics"
 )
 
 // Reconciler behavior specs (HYPERFLEET-1407). These run against envtest, which
@@ -204,6 +206,35 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 		Expect(cm.ResourceVersion).To(Equal(cmRV), "server-side apply of identical state must be a no-op")
 	})
 
+	It("does not record a spurious rollout on a no-op reconcile against a real API server", func() {
+		// detectRollouts hashes the live Deployment's pod template directly (to catch
+		// out-of-band drift a stamped annotation could miss — see its doc comment).
+		// A fake client would never expose the bug this guards against: only a real
+		// API server injects defaults (DNSPolicy, RestartPolicy, SchedulerName, the
+		// container's TerminationMessagePath/Policy, etc.) into the pod template that
+		// component.Render never sets. If hashPodTemplate is not robust to those
+		// additions, every reconcile — forever — looks like a config-triggered
+		// rollout, because live is never equal to desired again after the first apply.
+		By("reconciling to create the operands")
+		doReconcile()
+
+		configBefore := testutil.ToFloat64(
+			metrics.OperandRollouts.WithLabelValues(apicomponent.ComponentName, metrics.TriggerConfig))
+		imageBefore := testutil.ToFloat64(
+			metrics.OperandRollouts.WithLabelValues(apicomponent.ComponentName, metrics.TriggerImage))
+
+		By("reconciling twice more with no spec change")
+		doReconcile()
+		doReconcile()
+
+		Expect(testutil.ToFloat64(
+			metrics.OperandRollouts.WithLabelValues(apicomponent.ComponentName, metrics.TriggerConfig))).
+			To(Equal(configBefore), "a no-op reconcile must not count a config-triggered rollout")
+		Expect(testutil.ToFloat64(
+			metrics.OperandRollouts.WithLabelValues(apicomponent.ComponentName, metrics.TriggerImage))).
+			To(Equal(imageBefore), "a no-op reconcile must not count an image-triggered rollout")
+	})
+
 	It("stamps a config-hash on the Deployment and rolls it when a referenced secret rotates", func() {
 		By("creating the referenced database secret")
 		dbSecret := &corev1.Secret{
@@ -243,6 +274,29 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 		Expect(dep.Spec.Template.Annotations[configHashAnnotation]).NotTo(Equal(firstHash))
 	})
 
+	It("records observability metrics for the reconcile and its operands", func() {
+		By("reconciling to create the operands")
+		doReconcile()
+
+		By("publishing the applied-config digest as a single info series")
+		// SetAppliedConfigHash resets before setting, so exactly one series exists
+		// regardless of how many times the suite has reconciled.
+		Expect(testutil.CollectAndCount(metrics.AppliedConfig)).To(Equal(1))
+
+		By("publishing operand readiness for the api component")
+		// envtest is apiserver + etcd only: no deployment controller runs, so the
+		// operand never reports Available. The gauge must still be published, at 0.
+		Expect(testutil.ToFloat64(
+			metrics.OperandReady.WithLabelValues(apicomponent.ComponentName))).To(Equal(0.0))
+
+		By("counting a create-triggered rollout for the api operand")
+		// The Deployment did not exist before this reconcile (BeforeEach starts
+		// clean), so the reconcile records at least one create rollout.
+		Expect(testutil.ToFloat64(
+			metrics.OperandRollouts.WithLabelValues(apicomponent.ComponentName, metrics.TriggerCreate))).
+			To(BeNumerically(">=", 1))
+	})
+
 	It("returns without error when the CR is absent (deletion path)", func() {
 		By("deleting the singleton before it is reconciled")
 		deleteSingletonAndWait(ctx)
@@ -266,8 +320,21 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 			OperatorNamespace: "does-not-exist",
 			APIImage:          apiImage,
 		}
+
+		// The Deployment among the rendered objects would detect as a create-triggered
+		// rollout, but the apply above fails before anything is persisted. The rollout
+		// counter must not advance for a rollout that never happened — otherwise a
+		// reconcile retried on every failed apply would keep double-counting it.
+		before := testutil.ToFloat64(
+			metrics.OperandRollouts.WithLabelValues(apicomponent.ComponentName, metrics.TriggerCreate))
+
 		_, err := badReconciler.Reconcile(ctx, ctrl.Request{NamespacedName: typeNamespacedName})
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("apply component"))
+
+		By("not counting a rollout for the failed apply")
+		Expect(testutil.ToFloat64(
+			metrics.OperandRollouts.WithLabelValues(apicomponent.ComponentName, metrics.TriggerCreate))).
+			To(Equal(before))
 	})
 })

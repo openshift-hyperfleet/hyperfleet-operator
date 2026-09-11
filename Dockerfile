@@ -2,6 +2,15 @@ ARG BASE_IMAGE=registry.access.redhat.com/ubi9-micro:latest
 
 FROM registry.access.redhat.com/ubi9/go-toolset:9.8-1788409979 AS builder
 
+# APP_VERSION/GIT_SHA are injected into the binary below via -ldflags -X, so
+# hyperfleet_operator_build_info reports the real release/commit instead of
+# falling back to "dev"/"unknown" (see internal/version and docs/metrics.md).
+# The container build has no .git directory to source them from automatically,
+# unlike `make build`/`make run`, which get them from the toolchain's own VCS
+# stamping.
+ARG APP_VERSION="0.0.0-dev"
+ARG GIT_SHA="unknown"
+
 USER root
 WORKDIR /workspace
 # Copy the Go Modules manifests
@@ -18,7 +27,10 @@ COPY internal/ internal/
 
 
 RUN CGO_ENABLED=1 GOEXPERIMENT=boringcrypto \
-    go build -trimpath -ldflags="-s -w" -o manager ./cmd/main.go
+    go build -trimpath -ldflags="-s -w \
+      -X github.com/openshift-hyperfleet/hyperfleet-operator/internal/version.version=${APP_VERSION} \
+      -X github.com/openshift-hyperfleet/hyperfleet-operator/internal/version.commit=${GIT_SHA}" \
+    -o manager ./cmd/main.go
 
 # Runtime stage
 FROM ${BASE_IMAGE} AS final

@@ -201,10 +201,10 @@ GIT_DIRTY ?= $(shell [ -z "$$(git status --porcelain 2>/dev/null)" ] || echo "-m
 CGO_ENABLED ?= 1
 GOEXPERIMENT ?= boringcrypto
 GOFLAGS ?= -trimpath
-# LDFLAGS := -s -w \
-#            -X github.com/openshift-hyperfleet/hyperfleet-operator/pkg/version.Version=$(APP_VERSION) \
-#            -X github.com/openshift-hyperfleet/hyperfleet-operator/pkg/version.Commit=$(GIT_SHA) \
-#            -X 'github.com/openshift-hyperfleet/hyperfleet-operator/pkg/version.BuildTime=$(BUILD_DATE)'
+# APP_VERSION/GIT_SHA are injected into the binary via the Dockerfile's own
+# -ldflags -X (see Dockerfile and internal/version); `make build`/`make run`
+# intentionally skip ldflags and rely on the Go toolchain's automatic VCS
+# stamping from the local .git checkout instead (see internal/version).
 
 .PHONY: check-container-tool
 check-container-tool:
@@ -220,6 +220,7 @@ image: check-container-tool manifests generate fmt vet ## Build container image 
 		--platform $(PLATFORM) \
 		--build-arg BASE_IMAGE=$(BASE_IMAGE) \
 		--build-arg APP_VERSION=$(APP_VERSION) \
+		--build-arg GIT_SHA=$(GIT_SHA) \
 		-t $(IMG) .
 	@echo "Image built: $(IMG)"
 	@echo "$(IMG)"
