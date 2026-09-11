@@ -13,9 +13,9 @@ Konflux Workflow:
 5. Subsequently, the operator-bundle-push pipeline will update the operator-bundle image in the `konflux-template.yaml`.
 6. Konflux takes care of auto-merging the update, once merged, it will trigger the operator-catalog-push .tekton pipeline which will build operator-catalog image and push it to `quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator-catalog`
 
-** TODO - HYPERFLEET-1617 - Update documentation based on release details for the catalog. Assumption right now is we will release the hyperfleet-operator as a catalog that can be installed with olm.
-
 ** Note: Any update to [bundle.konflux.Dockerfile](../bundle.konflux.Dockerfile) operator-bundle-push pipeline and any update to [konflux-template.yaml](../catalog/konflux-template.yaml) will trigger the operator-catalog-push pipeline.
+
+** TODO - HYPERFLEET-1617 - Update documentation based on release details for the catalog. Currently no upgrade graph for the hyperfleet-operator.
 
 ## Developer Installation
 
@@ -23,7 +23,7 @@ Konflux Workflow:
 - go version v1.26.0+
 - docker version 17.05+.
 - kubectl version v1.11.3+.
-- Access to a Kubernetes v1.11.3+ cluster.
+- Access to a Kubernetes 1.27.0+ cluster.
 
 ### Prerequisite steps
 For local development and installation, set your Quay username to automatically configure image paths:
@@ -37,12 +37,12 @@ git checkout -b <dev-branch>
 # Build and push dev image
 make image-dev
 # With default values - pushes to: quay.io/$QUAY_USER/hyperfleet-operator:dev-<git-sha>
-export IMG=quay.io/$QUAY_USER/hyperfleet-operator:dev-<git-sha>
-# export IMG so that it can be properly picked up for bundle generation
+export OPERATOR_IMG=quay.io/$QUAY_USER/hyperfleet-operator:dev-<git-sha>
+# export OPERATOR_IMG so that it can be properly picked up for bundle generation
 ```
 
 **Image path defaults:**
-- IMG (hyperfleet-operator image): `quay.io/$QUAY_USER/hyperfleet-operator:dev-<git-sha>` (defaults `make image-dev`)
+- OPERATOR_IMG (hyperfleet-operator image): `quay.io/$QUAY_USER/hyperfleet-operator:dev-<git-sha>` (defaults `make image-dev`)
 - BUNDLE_IMG (hyperfleet-operator-bundle): `quay.io/$QUAY_USER/hyperfleet-operator-bundle:v$(VERSION)` (default VERSION=0.0.1)
 - CATALOG_IMG (hyperfleet-operator-catalog): `quay.io/$QUAY_USER/hyperfleet-operator-catalog:v$(VERSION)` (defaul VERSION=0.0.1)
 
@@ -53,7 +53,7 @@ The catalog build uses a template system with a base template (`catalog/base-tem
 - `catalog/dev-template.yaml` - for local development (default)
 - `catalog/konflux-template.yaml` - for Konflux CI builds
 
-**Note:** Ensure `IMG`, `BUNDLE_IMG` and `CATALOG_IMG` is properly exported before running these commands
+**Note:** Ensure `OPERATOR_IMG`, `BUNDLE_IMG` and `CATALOG_IMG` is properly exported before running these commands
 
 1. **Update bundle with operator image:** - WARNING restore changes once done testing!
    ```bash
@@ -150,7 +150,7 @@ The catalog build uses a template system with a base template (`catalog/base-tem
 ### OLM Installation (operator-sdk run bundle)
 Quick testing with `operator-sdk run bundle` (no catalog needed).
 
-**Note:** Ensure `IMG` and `BUNDLE_IMG` is properly exported before running these commands
+**Note:** Ensure `OPERATOR_IMG` and `BUNDLE_IMG` is properly exported before running these commands
 
 1. **Update bundle with operator image:** - WARNING restore changes once done testing!
    ```bash
@@ -183,10 +183,10 @@ Quick testing with `operator-sdk run bundle` (no catalog needed).
 ### Non-OLM Installation
 Testing hyperfleet-operator installation without OLM (kubectl apply)
 
-**Note:** Ensure `IMG` is properly exported before running these commands
+**Note:** Ensure `OPERATOR_IMG` is properly exported before running these commands
 1. **Quick testing on a k8s cluster:**
     ```bash
-    export IMG="quay.io/$QUAY_USER/hyperfleet-operator:dev-<git-sha>"
+    export OPERATOR_IMG="quay.io/$QUAY_USER/hyperfleet-operator:dev-<git-sha>"
     make deploy
     # Generates: dist/install.yaml
     # Again, make sure to restore config/manager/kustomization.yaml after testing
@@ -196,7 +196,7 @@ Testing hyperfleet-operator installation without OLM (kubectl apply)
     kubectl apply -k config/samples/
 
     # Cleanup - IMPORTANT: Delete CRs before uninstalling operator
-    # 1. Export and delete the cluster-scoped HyperFleetConfig CR
+    # 1. Export and delete the HyperFleetConfig CR
     kubectl get hyperfleetconfig -o yaml > hyperfleetconfig-backup.yaml
     kubectl delete hyperfleetconfig --all
 
