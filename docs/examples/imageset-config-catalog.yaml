@@ -1,0 +1,11 @@
+# Replace the catalog placeholder with the published release catalog digest.
+# Confirm the package and channel against that catalog before exporting.
+apiVersion: mirror.openshift.io/v2alpha1
+kind: ImageSetConfiguration
+mirror:
+  operators:
+  - catalog: registry.example.com/hyperfleet/hyperfleet-operator-catalog@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    packages:
+    - name: hyperfleet-operator
+      channels:
+      - name: stable

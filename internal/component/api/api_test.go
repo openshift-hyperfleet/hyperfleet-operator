@@ -152,6 +152,10 @@ func TestRenderDeployment(t *testing.T) {
 	g.Expect(c.SecurityContext.ReadOnlyRootFilesystem).To(HaveValue(BeTrue()))
 	g.Expect(c.SecurityContext.AllowPrivilegeEscalation).To(HaveValue(BeFalse()))
 	g.Expect(dep.Spec.Template.Spec.SecurityContext.RunAsNonRoot).To(HaveValue(BeTrue()))
+	// A fixed UID or fsGroup is rejected by OpenShift's restricted SCC. Leave
+	// both unset so the platform can allocate values from the namespace range.
+	g.Expect(dep.Spec.Template.Spec.SecurityContext.RunAsUser).To(BeNil())
+	g.Expect(dep.Spec.Template.Spec.SecurityContext.FSGroup).To(BeNil())
 
 	// The config ConfigMap is mounted read-only at the expected path.
 	var mountedConfig bool

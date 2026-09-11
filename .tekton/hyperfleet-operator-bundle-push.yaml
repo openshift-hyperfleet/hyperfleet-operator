@@ -9,7 +9,7 @@ metadata:
     pipelinesascode.tekton.dev/max-keep-runs: "3"
     pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch
       == "main" && ( ".tekton/hyperfleet-operator-bundle-push.yaml".pathChanged() || "bundle.konflux.Dockerfile".pathChanged()
-      || "bundle-hack/***".pathChanged() || "bundle/***".pathChanged() )
+      || "hack/bundle/***".pathChanged() || "bundle/***".pathChanged() )
   labels:
     appstudio.openshift.io/application: hyperfleet
     appstudio.openshift.io/component: hyperfleet-operator-bundle

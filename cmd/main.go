@@ -42,6 +42,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
+	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/api"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
@@ -235,7 +236,7 @@ func main() {
 	// it at bundle-build time via the relatedImages convention. Warn — but do not
 	// fail — when it is unset or uses a mutable tag, so `make run` and tag-based
 	// deploys keep working while the risk is surfaced in the logs.
-	apiImage := os.Getenv("RELATED_IMAGE_HYPERFLEET_API")
+	apiImage := os.Getenv(api.RelatedImageEnv)
 	switch {
 	case apiImage == "":
 		setupLog.Info("RELATED_IMAGE_HYPERFLEET_API not set; falling back to the " +
