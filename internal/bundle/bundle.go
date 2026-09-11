@@ -37,12 +37,15 @@ import (
 //
 //   - Render is a pure function (CR → desired objects); it must not read or write
 //     the cluster. The controller applies what it returns.
-//   - Conditions reports component health. It is consumed starting in
-//     HYPERFLEET-1409; until then the controller does not roll it into status.
+//   - Conditions is also cluster-access-free: it derives health from applied, the
+//     objects Render produced, already updated in place by apply.Objects with the
+//     server's current status (see internal/apply). This avoids giving every
+//     component its own client.Client and an extra round of API reads for state
+//     the controller already has. Consumed starting in HYPERFLEET-1409.
 type Component interface {
 	Name() string
 	Render(ctx context.Context, cr *hyperfleetv1alpha1.HyperFleetConfig) ([]client.Object, error)
-	Conditions(ctx context.Context, cr *hyperfleetv1alpha1.HyperFleetConfig) ([]metav1.Condition, error)
+	Conditions(ctx context.Context, cr *hyperfleetv1alpha1.HyperFleetConfig, applied []client.Object) ([]metav1.Condition, error)
 }
 
 // Config carries the inputs the resolver needs to construct components.

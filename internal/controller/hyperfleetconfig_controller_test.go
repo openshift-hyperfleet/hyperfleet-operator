@@ -18,6 +18,8 @@ package controller
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -250,6 +252,205 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 		By("reconciling a now-absent CR")
 		_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: typeNamespacedName})
 		Expect(err).NotTo(HaveOccurred())
+	})
+
+	// Status-condition transition matrix (HYPERFLEET-1409). envtest is apiserver +
+	// etcd only — there is no Deployment controller, so nothing ever auto-populates
+	// a Deployment's .status. Each scenario below patches the Deployment's status
+	// subresource directly to simulate what the real Deployment controller would
+	// have written, then reconciles again and asserts the CR's rolled-up status.
+
+	// conditionByType is defined package-level in hyperfleetconfig_status_test.go.
+
+	// getCR re-fetches the singleton's current state.
+	getCR := func() *hyperfleetv1alpha1.HyperFleetConfig {
+		GinkgoHelper()
+		cr := &hyperfleetv1alpha1.HyperFleetConfig{}
+		Expect(k8sClient.Get(ctx, typeNamespacedName, cr)).To(Succeed())
+		return cr
+	}
+
+	// patchDeploymentStatus fetches the API Deployment and overwrites its status
+	// subresource, simulating what the built-in Deployment controller would write.
+	patchDeploymentStatus := func(mutate func(*appsv1.Deployment)) {
+		GinkgoHelper()
+		dep := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, operandKey(apicomponent.ResourceName), dep)).To(Succeed())
+		mutate(dep)
+		Expect(k8sClient.Status().Update(ctx, dep)).To(Succeed())
+	}
+
+	// createReferencedSecrets creates every Secret the fixture CR (validHyperFleetConfig)
+	// references — the database Secret and the pinned JWKS Secret — so scenarios
+	// about Deployment/rollout health are not incidentally also Degraded on a
+	// missing Secret (that is its own dedicated scenario below).
+	createReferencedSecrets := func() {
+		GinkgoHelper()
+		dbSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: testDBSecretName, Namespace: operatorNamespace},
+			Data: map[string][]byte{
+				apicomponent.SecretKeyDBHost:     []byte("db.example.com"),
+				apicomponent.SecretKeyDBPort:     []byte("5432"),
+				apicomponent.SecretKeyDBName:     []byte("hyperfleet"),
+				apicomponent.SecretKeyDBUser:     []byte("hyperfleet"),
+				apicomponent.SecretKeyDBPassword: []byte("password"),
+			},
+		}
+		jwksSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: testJWKSSecretName, Namespace: operatorNamespace},
+			Data:       map[string][]byte{apicomponent.SecretKeyJWKS: []byte(`{"keys":[]}`)},
+		}
+		for _, s := range []*corev1.Secret{dbSecret, jwksSecret} {
+			Expect(k8sClient.Create(ctx, s)).To(Succeed())
+			DeferCleanup(func(ctx context.Context, obj client.Object) {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, obj))).To(Succeed())
+			}, ctx, s)
+		}
+	}
+
+	It("reports Available=False and Progressing=True on install, before the Deployment is ready", func() {
+		By("creating the referenced secrets so Degraded is not also triggered")
+		createReferencedSecrets()
+
+		By("reconciling the freshly-created singleton")
+		doReconcile()
+
+		cr := getCR()
+		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionAvailable).Status).To(Equal(metav1.ConditionFalse))
+		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionAvailable).Reason).To(Equal(hyperfleetv1alpha1.ReasonDeploymentUnavailable))
+		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionProgressing).Status).To(Equal(metav1.ConditionTrue))
+		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionDegraded).Status).To(Equal(metav1.ConditionFalse))
+		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionDegraded).Reason).To(Equal(hyperfleetv1alpha1.ReasonAsExpected))
+		Expect(cr.Status.ObservedGeneration).To(Equal(cr.Generation))
+	})
+
+	It("reports Available=True and Progressing=False once the Deployment is fully ready", func() {
+		By("reconciling to create the operands")
+		doReconcile()
+
+		By("marking the Deployment fully ready, as the real Deployment controller would")
+		patchDeploymentStatus(func(dep *appsv1.Deployment) {
+			dep.Status.Replicas = 1
+			dep.Status.AvailableReplicas = 1
+			dep.Status.ReadyReplicas = 1
+			dep.Status.UpdatedReplicas = 1
+			dep.Status.ObservedGeneration = dep.Generation
+		})
+
+		By("reconciling again and reading the rolled-up status")
+		doReconcile()
+
+		cr := getCR()
+		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionAvailable).Status).To(Equal(metav1.ConditionTrue))
+		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionAvailable).Reason).To(Equal(hyperfleetv1alpha1.ReasonDeploymentAvailable))
+		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionProgressing).Status).To(Equal(metav1.ConditionFalse))
+		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionProgressing).Reason).To(Equal(hyperfleetv1alpha1.ReasonRolloutComplete))
+	})
+
+	It("reports Progressing=True while a rollout to a new generation has not completed", func() {
+		doReconcile()
+
+		By("marking the Deployment healthy at its current generation")
+		patchDeploymentStatus(func(dep *appsv1.Deployment) {
+			dep.Status.Replicas = 1
+			dep.Status.AvailableReplicas = 1
+			dep.Status.ReadyReplicas = 1
+			dep.Status.UpdatedReplicas = 1
+			dep.Status.ObservedGeneration = dep.Generation
+		})
+		doReconcile()
+		Expect(conditionByType(getCR(), hyperfleetv1alpha1.ConditionProgressing).Status).To(Equal(metav1.ConditionFalse))
+
+		By("simulating a lagging rollout: the Deployment has not caught up to its latest generation")
+		patchDeploymentStatus(func(dep *appsv1.Deployment) {
+			dep.Status.ObservedGeneration = dep.Generation - 1
+		})
+
+		doReconcile()
+		cr := getCR()
+		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionProgressing).Status).To(Equal(metav1.ConditionTrue))
+		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionProgressing).Reason).To(Equal(hyperfleetv1alpha1.ReasonRolloutInProgress))
+	})
+
+	It("reports Available=False when the operand Deployment goes down after having been healthy", func() {
+		doReconcile()
+		patchDeploymentStatus(func(dep *appsv1.Deployment) {
+			dep.Status.Replicas = 1
+			dep.Status.AvailableReplicas = 1
+			dep.Status.ReadyReplicas = 1
+			dep.Status.UpdatedReplicas = 1
+			dep.Status.ObservedGeneration = dep.Generation
+		})
+		doReconcile()
+		Expect(conditionByType(getCR(), hyperfleetv1alpha1.ConditionAvailable).Status).To(Equal(metav1.ConditionTrue))
+
+		By("simulating the operand going down")
+		patchDeploymentStatus(func(dep *appsv1.Deployment) {
+			dep.Status.AvailableReplicas = 0
+			dep.Status.ReadyReplicas = 0
+		})
+
+		doReconcile()
+		cr := getCR()
+		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionAvailable).Status).To(Equal(metav1.ConditionFalse))
+		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionAvailable).Reason).To(Equal(hyperfleetv1alpha1.ReasonDeploymentUnavailable))
+	})
+
+	It("reports Degraded=True when a referenced Secret is missing", func() {
+		By("reconciling without creating the fixture's referenced database Secret")
+		// The fixture's HyperFleetConfig references a database Secret that is never
+		// created in this spec, so referencedSecretData reports it absent.
+		doReconcile()
+
+		cr := getCR()
+		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionDegraded).Status).To(Equal(metav1.ConditionTrue))
+		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionDegraded).Reason).To(Equal(hyperfleetv1alpha1.ReasonReferencedSecretMissing))
+		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionDegraded).Message).To(ContainSubstring("database"))
+	})
+
+	It("does not bump lastTransitionTime on a no-op reconcile", func() {
+		By("reconciling once to establish a baseline status")
+		doReconcile()
+		firstTransition := conditionByType(getCR(), hyperfleetv1alpha1.ConditionAvailable).LastTransitionTime
+
+		By("reconciling again with no state change")
+		doReconcile()
+
+		Expect(conditionByType(getCR(), hyperfleetv1alpha1.ConditionAvailable).LastTransitionTime).To(Equal(firstTransition))
+	})
+
+	It("reports Degraded=True but leaves Available/Progressing untouched when reconcile fails before any component reports", func() {
+		By("reconciling once so a real Available/Progressing value is already recorded")
+		createReferencedSecrets()
+		doReconcile()
+		cr := getCR()
+		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionAvailable).Status).To(Equal(metav1.ConditionFalse))
+		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionAvailable).Reason).To(Equal(hyperfleetv1alpha1.ReasonDeploymentUnavailable))
+
+		By("pointing auth at an issuer whose discovery endpoint fails, so OIDC discovery errors before referencedSecretData or any component ever runs")
+		badDiscovery := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		DeferCleanup(badDiscovery.Close)
+		reconciler.HTTPClient = badDiscovery.Client()
+
+		cr.Spec.API.Auth.JWKCertSecretRef = nil
+		cr.Spec.API.Auth.Issuer = badDiscovery.URL
+		Expect(k8sClient.Update(ctx, cr)).To(Succeed())
+
+		_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: typeNamespacedName})
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("resolve JWKS URL"))
+
+		By("verifying Degraded reflects the failure while Available is left at its last-recorded value, not fabricated healthy")
+		cr = getCR()
+		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionDegraded).Status).To(Equal(metav1.ConditionTrue))
+		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionDegraded).Reason).To(Equal(hyperfleetv1alpha1.ReasonReconcileError))
+		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionDegraded).Message).NotTo(ContainSubstring("500"),
+			"the Degraded message must not echo the raw wrapped error")
+		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionAvailable).Status).To(Equal(metav1.ConditionFalse),
+			"Available must remain at its last-recorded value, not be fabricated True")
+		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionAvailable).Reason).To(Equal(hyperfleetv1alpha1.ReasonDeploymentUnavailable))
 	})
 
 	It("returns a wrapped error when the operand namespace is absent", func() {
