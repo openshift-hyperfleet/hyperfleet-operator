@@ -11,7 +11,7 @@ RUN microdnf install -y tar gzip && \
 FROM builder-runner AS builder
 # Hack to set the operator container image in the deployment
 # Konflux nudges update these variables with the latest digest-pinned pullspecs.
-ARG HYPERFLEET_OPERATOR_IMAGE_PULLSPEC="quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator@sha256:ca96669f92c969e4cf9eb2fe65805bac6c958b9f087cf6623bc55e46cd01a36b"
+ARG HYPERFLEET_OPERATOR_IMAGE_PULLSPEC="quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator@sha256:45de8db3123a8414263c6de33c09fc49fe47092e291e94cc945c8c5cbd9d6b4d"
 ENV HYPERFLEET_OPERATOR_IMAGE_PULLSPEC=${HYPERFLEET_OPERATOR_IMAGE_PULLSPEC}
 
 ARG HYPERFLEET_API_IMAGE_PULLSPEC="quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-api@sha256:99f8cdda580069de21ba0e13b5b171cf82b81b93dc88b12bcaa8294e72e84fc3"
