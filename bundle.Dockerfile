@@ -1,8 +1,18 @@
+FROM registry.access.redhat.com/ubi9/go-toolset:9.8-1789040808 AS validator
+
+WORKDIR /workdir
+COPY validators/ ./validators/
+COPY go.mod go.mod
+COPY go.sum go.sum
+
+RUN go build -o ./bin/related-images-validator ./validators/related-images/
+
 FROM quay.io/konflux-ci/operator-sdk-builder:latest@sha256:bd34ca58b2d08e8ee3b9cdf46b32f69173084ca09c1d3aba47285e2c35b4d1fc AS builder
 
 WORKDIR /workdir
 COPY config/ ./config/
 
+COPY --from=validator /workdir/bin/related-images-validator ./related-images-validator
 # Specify the kustomize variant, either bases/kustomization.yaml or prod/kustomization.yaml
 # prod/kustomization.yaml gets image update references from konflux.
 ARG KUSTOMIZE_VARIANT=config/manifests/dev
@@ -17,7 +27,10 @@ RUN mkdir -p /workdir/bundle
 RUN cat manifests.yaml | operator-sdk generate bundle -q --version ${BUNDLE_VERSION} \
       --channels=${CHANNELS} --default-channel=${DEFAULT_CHANNEL} \
       --package=hyperfleet-operator && \
-    operator-sdk bundle validate ./bundle --select-optional name=operatorhubv2
+    operator-sdk bundle validate ./bundle --select-optional name=operatorhubv2 && \
+    if [ "${VALIDATE_RELATED_IMAGES}" = "true" ]; then \
+      operator-sdk bundle validate ./bundle --alpha-select-external ./related-images-validator; \
+    fi
 
 FROM scratch
 

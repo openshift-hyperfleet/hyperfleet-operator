@@ -120,22 +120,9 @@ cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 
 ##@ Lint
 
-.PHONY: verify-related-images
-verify-related-images: ## Verify a final built bundle CSV (CSV_FILE is required).
-	@test -n "$(CSV_FILE)" || { echo "Set CSV_FILE to the CSV extracted from the built bundle"; exit 1; }
-	go run ./hack/verify-related-images -csv "$(CSV_FILE)"
-
 .PHONY: lint
 lint: ## Run golangci-lint.
 	$(GOLANGCI_LINT) run
-
-.PHONY: verify-bundle-related-images
-verify-bundle-related-images: ## Transform the repository bundle CSV and verify its related images.
-	@set -euo pipefail; \
-	yq_path=$$($(call gotool,-n yq)); \
-	YQ="$$yq_path" bash ./hack/verify-bundle-related-images.sh; \
-	PATH="$$(dirname "$$yq_path"):$$PATH" go test -tags integration ./hack/verify-related-images; \
-	YQ="$$yq_path" bash ./hack/test-verify-bundle-related-images.sh
 
 .PHONY: lint-fix
 lint-fix: ## Run golangci-lint linter and perform fixes
@@ -351,6 +338,8 @@ endif
 # To override the operator and API images:
 #   make bundle-build RELATED_IMAGE_HYPERFLEET_OPERATOR=<image> RELATED_IMAGE_HYPERFLEET_API=<image>
 KUSTOMIZE_VARIANT ?= config/manifests/dev
+# For dev builds - unset validation of related images
+VALIDATE_RELATED_IMAGES ?= false
 .PHONY: bundle-build
 bundle-build: ## Builds the bundle and bundle image.
 	cat config/manifests/dev/patch-images.yaml | envsubst > config/manifests/dev/kustomization.yaml
@@ -360,6 +349,7 @@ bundle-build: ## Builds the bundle and bundle image.
 		--build-arg CHANNELS=$(CHANNELS) \
 		--build-arg DEFAULT_CHANNEL=$(DEFAULT_CHANNEL) \
 		--build-arg KUSTOMIZE_VARIANT=$(KUSTOMIZE_VARIANT) \
+		--build-arg VALIDATE_RELATED_IMAGES=$(VALIDATE_RELATED_IMAGES) \
 		--build-arg APP_VERSION=$(APP_VERSION) \
 		-t $(BUNDLE_IMG) .
 

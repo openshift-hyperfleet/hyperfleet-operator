@@ -1,3 +1,5 @@
+package main
+
 // Copyright 2026.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -11,8 +13,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
-package main
 
 import (
 	"strings"
@@ -60,35 +60,48 @@ func TestVerifyBuiltBundleCSV(t *testing.T) {
 		{"different bundle", func(s string) string { return strings.ReplaceAll(s, apiImage, extraImage) }, ""},
 		{"stale related image", func(s string) string {
 			return strings.Replace(s, "    image: "+apiImage, "    image: "+extraImage, 1)
-		}, "expected"},
+		}, "env var not add to relatedImages"},
 		{"tagged bundle image", func(s string) string {
 			return strings.ReplaceAll(s, apiImage, "registry.example.com/api:latest")
-		}, "mutable or malformed"},
+		}, "not using sha256"},
 		{"URL-style bundle image", func(s string) string {
 			return strings.ReplaceAll(s, apiImage, "https://registry.example.com/api@sha256:"+strings.Repeat("4", 64))
-		}, "mutable or malformed"},
-		{"duplicate", func(s string) string {
-			return s + "  - name: hyperfleet-api\n    image: " + apiImage + "\n"
-		}, "duplicate name"},
-		{"missing API everywhere", func(s string) string {
-			env := "                env:\n                - name: RELATED_IMAGE_HYPERFLEET_API\n" +
-				"                  value: " + apiImage + "\n"
-			s = strings.Replace(s, env, "", 1)
-			return strings.Replace(s, "  - name: hyperfleet-api\n    image: "+apiImage+"\n", "", 1)
-		}, "missing required runtime override"},
-		{"missing manager", func(s string) string {
-			return strings.Replace(s, "name: manager", "name: other", 1)
-		}, "expected exactly one manager"},
+		}, "not using sha256"},
+		{"duplicate relatedImage", func(s string) string {
+			return s + "  - name: extra\n    image: " + apiImage + "\n"
+		}, "duplicate value of image"},
+		{"same env in two containers is valid", func(s string) string {
+			sidecar := "\n              - name: sidecar\n" +
+				"                image: " + operatorImage + "\n" +
+				"                env:\n" +
+				"                - name: RELATED_IMAGE_HYPERFLEET_API\n" +
+				"                  value: " + apiImage
+			return strings.Replace(s, "  relatedImages:", sidecar+"\n  relatedImages:", 1)
+		}, ""},
+		{"duplicate env with unknown value", func(s string) string {
+			dup := "\n                - name: RELATED_IMAGE_HYPERFLEET_API\n" +
+				"                  value: " + extraImage
+			return strings.Replace(s, "  relatedImages:", dup+"\n  relatedImages:", 1)
+		}, "env var duplicated"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := verifyCSV([]byte(tt.mutate(validCSV())))
+			result := validateCSVData([]byte(tt.mutate(validCSV())))
 			if tt.want == "" {
-				if err != nil {
-					t.Fatal(err)
+				if len(result.Errors) > 0 {
+					t.Fatalf("expected no errors, got: %v", result.Errors)
 				}
-			} else if err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("error = %v, want %q", err, tt.want)
+			} else {
+				found := false
+				for _, e := range result.Errors {
+					if strings.Contains(e.Detail, tt.want) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Fatalf("expected error containing %q, got: %v", tt.want, result.Errors)
+				}
 			}
 		})
 	}

@@ -12,7 +12,8 @@ metadata:
       == "main" && 
       (".tekton/hyperfleet-operator-bundle-push.yaml".pathChanged() || 
       "bundle.Dockerfile".pathChanged() || 
-      "config/***".pathChanged())
+      "config/***".pathChanged() ||
+      "validators/related-images/**".pathChanged())
   labels:
     appstudio.openshift.io/application: hyperfleet
     appstudio.openshift.io/component: hyperfleet-operator-bundle
@@ -228,6 +229,7 @@ spec:
         - $(params.build-args[*])
         - KUSTOMIZE_VARIANT=config/manifests/prod
         - BUNDLE_VERSION=0.0.1
+        - VALIDATE_RELATED_IMAGES=true
       - name: BUILD_ARGS_FILE
         value: $(params.build-args-file)
       - name: PRIVILEGED_NESTED
