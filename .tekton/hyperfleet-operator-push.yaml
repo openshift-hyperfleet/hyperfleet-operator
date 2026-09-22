@@ -15,6 +15,7 @@ metadata:
            x.matches('^bundle\\.Dockerfile$')
            || x.matches('^config/manifests/prod/')
            || x.matches('^hack/test-disconnected-mirror\\.sh$')
+           || x.matches('^validators/')
            || x.matches('^\\.tekton/hyperfleet-operator-bundle-push\\.yaml$')
            || x.matches('^catalog/')
            || x.matches('^catalog\\.Dockerfile$')
