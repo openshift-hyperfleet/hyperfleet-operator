@@ -1,0 +1,16 @@
+apiVersion: hyperfleet.redhat.com/v1alpha1
+kind: HyperFleetConfig
+metadata:
+  name: cluster
+spec:
+  bundle: cloud-capi
+  api:
+    database:
+      secretRef:
+        name: hyperfleet-db
+    auth:
+      enabled: true
+      issuer: https://issuer.example.com
+      audience: hyperfleet-api
+      jwkCertSecretRef:
+        name: hyperfleet-jwks

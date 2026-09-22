@@ -19,6 +19,7 @@ package e2e
 import (
 	"fmt"
 	"os/exec"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -72,8 +73,12 @@ var _ = Describe("Manager", Ordered, func() {
 	// After all tests have been executed, clean up by undeploying the controller, uninstalling CRDs,
 	// and deleting the namespace.
 	AfterAll(func() {
+		By("cleaning up the HyperFleetConfig singleton")
+		cmd := exec.Command("kubectl", "delete", "hyperfleetconfig", "cluster", "--ignore-not-found=true")
+		_, _ = utils.Run(cmd)
+
 		By("cleaning up the curl pod for metrics")
-		cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
+		cmd = exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace, "--ignore-not-found=true")
 		_, _ = utils.Run(cmd)
 
 		By("undeploying the controller-manager")
@@ -246,6 +251,88 @@ var _ = Describe("Manager", Ordered, func() {
 			))
 		})
 
+		It("should scope operand authorization to the operator namespace", func() {
+			By("verifying the manager can manage operands in its own namespace")
+			operandResources := []string{
+				"deployments.apps",
+				"services",
+				"serviceaccounts",
+				"configmaps",
+				"roles.rbac.authorization.k8s.io",
+				"rolebindings.rbac.authorization.k8s.io",
+			}
+			operandVerbs := []string{"get", "list", "watch", "create", "update", "patch"}
+			for _, resource := range operandResources {
+				for _, verb := range operandVerbs {
+					Expect(managerCanI(verb, resource, namespace)).To(Equal("yes"),
+						"manager should be allowed to %s %s in %s", verb, resource, namespace)
+				}
+			}
+
+			By("verifying the manager cannot manage operands in another namespace")
+			for _, resource := range operandResources {
+				for _, verb := range operandVerbs {
+					Expect(managerCanI(verb, resource, "default")).To(Equal("no"),
+						"manager should not be allowed to %s %s in default", verb, resource)
+				}
+				Expect(managerCanI("delete", resource, namespace)).To(Equal("no"),
+					"manager should not be allowed to delete %s; owner-reference GC handles cleanup", resource)
+			}
+
+			By("verifying cluster-scoped HyperFleetConfig access remains available")
+			for _, verb := range []string{"get", "list", "watch", "create", "update", "patch", "delete"} {
+				Expect(managerCanI(verb, "hyperfleetconfigs.hyperfleet.redhat.com", "")).To(Equal("yes"),
+					"manager should retain cluster-scoped HyperFleetConfig %s access", verb)
+			}
+			Expect(managerCanISubresource("update", "hyperfleetconfigs", "status")).To(Equal("yes"))
+			Expect(managerCanISubresource("update", "hyperfleetconfigs", "finalizers")).To(Equal("yes"))
+		})
+
+		It("should reconcile all operands in the operator namespace", func() {
+			By("creating the referenced database Secret")
+			cmd := exec.Command("kubectl", "create", "secret", "generic", "hyperfleet-db",
+				"-n", namespace,
+				"--from-literal=db.host=db.example.com",
+				"--from-literal=db.port=5432",
+				"--from-literal=db.name=hyperfleet",
+				"--from-literal=db.user=hyperfleet",
+				"--from-literal=db.password=password",
+			)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("creating the referenced JWKS Secret")
+			cmd = exec.Command("kubectl", "create", "secret", "generic", "hyperfleet-jwks",
+				"-n", namespace,
+				`--from-literal=jwks.json={"keys":[]}`,
+			)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("creating the cluster-scoped HyperFleetConfig")
+			cmd = exec.Command("kubectl", "apply", "-f", "test/e2e/hyperfleetconfig.yaml")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("waiting for the controller to create every operand")
+			operands := [][2]string{
+				{"deployment", "hyperfleet-api"},
+				{"service", "hyperfleet-api"},
+				{"serviceaccount", "hyperfleet-api"},
+				{"configmap", "hyperfleet-api-config"},
+				{"role", "hyperfleet-api"},
+				{"rolebinding", "hyperfleet-api"},
+			}
+			for _, operand := range operands {
+				resourceType, resourceName := operand[0], operand[1]
+				Eventually(func(g Gomega) {
+					cmd := exec.Command("kubectl", "get", resourceType, resourceName, "-n", namespace)
+					_, err := utils.Run(cmd)
+					g.Expect(err).NotTo(HaveOccurred(), "expected %s/%s to be created", resourceType, resourceName)
+				}).Should(Succeed())
+			}
+		})
+
 		// +kubebuilder:scaffold:e2e-webhooks-checks
 
 		// TODO: Customize the e2e test suite with scenarios specific to your project.
@@ -258,6 +345,27 @@ var _ = Describe("Manager", Ordered, func() {
 		// ))
 	})
 })
+
+const managerSubject = "system:serviceaccount:" + namespace + ":" + serviceAccountName
+
+func managerCanI(verb, resource, resourceNamespace string) string {
+	args := []string{"auth", "can-i", verb, resource, "--as", managerSubject}
+	return managerCanIWithArgs(args, resourceNamespace)
+}
+
+func managerCanISubresource(verb, resource, subresource string) string {
+	args := []string{"auth", "can-i", verb, resource, "--subresource", subresource, "--as", managerSubject}
+	return managerCanIWithArgs(args, "")
+}
+
+func managerCanIWithArgs(args []string, resourceNamespace string) string {
+	if resourceNamespace != "" {
+		args = append(args, "-n", resourceNamespace)
+	}
+	output, err := utils.Run(exec.Command("kubectl", args...))
+	Expect(err).NotTo(HaveOccurred(), "kubectl auth can-i failed: %v", args)
+	return strings.TrimSpace(output)
+}
 
 // getMetricsOutput retrieves and returns the logs from the curl pod used to access the metrics endpoint.
 func getMetricsOutput() string {
