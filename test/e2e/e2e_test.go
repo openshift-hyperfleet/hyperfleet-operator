@@ -17,6 +17,7 @@ limitations under the License.
 package e2e
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -37,12 +38,19 @@ const serviceAccountName = "hyperfleet-operator-controller-manager"
 
 const apiOperandName = "hyperfleet-api"
 
+const (
+	getVerb     = "get"
+	asGroupFlag = "--as-group"
+)
+
 // metricsServiceName is the name of the metrics service of the project
 const metricsServiceName = "hyperfleet-operator-controller-manager-metrics-service"
 
 // metricsPort is the plain-HTTP port the operator serves /metrics on, per the
 // HyperFleet metrics standard.
 const metricsPort = "9090"
+
+const cleanupTimeout = 30 * time.Second
 
 var _ = Describe("Manager", Ordered, func() {
 	var controllerPodName string
@@ -77,23 +85,25 @@ var _ = Describe("Manager", Ordered, func() {
 	// and deleting the namespace.
 	AfterAll(func() {
 		var cleanupErrors []error
-		runCleanup := func(step string, cmd *exec.Cmd) {
+		runCleanup := func(step, command string, args ...string) {
 			By(step)
-			if _, err := utils.Run(cmd); err != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+			defer cancel()
+			if _, err := utils.Run(exec.CommandContext(ctx, command, args...)); err != nil {
 				cleanupErrors = append(cleanupErrors, fmt.Errorf("%s: %w", step, err))
 			}
 		}
 
 		runCleanup("cleaning up the HyperFleetConfig singleton",
-			exec.Command("kubectl", "delete", "hyperfleetconfig", "cluster", "--ignore-not-found=true"))
+			"kubectl", "delete", "hyperfleetconfig", "cluster", "--ignore-not-found=true", "--wait=false")
 		runCleanup("cleaning up the curl pod for metrics",
-			exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace, "--ignore-not-found=true"))
+			"kubectl", "delete", "pod", "curl-metrics", "-n", namespace, "--ignore-not-found=true", "--wait=false")
 		runCleanup("undeploying the controller-manager",
-			exec.Command("make", "undeploy", "ignore-not-found=true"))
+			"make", "undeploy", "ignore-not-found=true")
 		runCleanup("uninstalling CRDs",
-			exec.Command("make", "uninstall", "ignore-not-found=true"))
+			"make", "uninstall", "ignore-not-found=true")
 		runCleanup("removing manager namespace",
-			exec.Command("kubectl", "delete", "ns", namespace, "--ignore-not-found=true"))
+			"kubectl", "delete", "ns", namespace, "--ignore-not-found=true", "--wait=false")
 
 		Expect(errors.Join(cleanupErrors...)).NotTo(HaveOccurred(), "e2e cleanup failed")
 	})
@@ -265,7 +275,7 @@ var _ = Describe("Manager", Ordered, func() {
 				"roles.rbac.authorization.k8s.io",
 				"rolebindings.rbac.authorization.k8s.io",
 			}
-			operandVerbs := []string{"get", "list", "watch", "create", "update", "patch"}
+			operandVerbs := []string{getVerb, "list", "watch", "create", "update", "patch"}
 			for _, resource := range operandResources {
 				for _, verb := range operandVerbs {
 					Expect(managerCanI(verb, resource, namespace)).To(BeTrue(),
@@ -350,18 +360,35 @@ var _ = Describe("Manager", Ordered, func() {
 	})
 })
 
-const managerSubject = "system:serviceaccount:" + namespace + ":" + serviceAccountName
+const (
+	managerSubject                 = "system:serviceaccount:" + namespace + ":" + serviceAccountName
+	serviceAccountsGroup           = "system:serviceaccounts"
+	namespacedServiceAccountsGroup = serviceAccountsGroup + ":" + namespace
+	authenticatedGroup             = "system:authenticated"
+)
 
 // managerCanI reports whether the controller manager is authorized for a resource action.
 func managerCanI(verb, resource, resourceNamespace string) bool {
-	args := []string{"auth", "can-i", verb, resource, "--as", managerSubject}
+	args := managerCanIArgs(verb, resource)
 	return managerCanIWithArgs(args, resourceNamespace)
 }
 
 // managerCanISubresource reports whether the controller manager is authorized for a subresource action.
 func managerCanISubresource(verb, resource, subresource string) bool {
-	args := []string{"auth", "can-i", verb, resource, "--subresource", subresource, "--as", managerSubject}
+	args := managerCanIArgs(verb, resource)
+	args = append(args, "--subresource", subresource)
 	return managerCanIWithArgs(args, "")
+}
+
+// managerCanIArgs builds authorization-check arguments for the manager's complete ServiceAccount identity.
+func managerCanIArgs(verb, resource string) []string {
+	return []string{
+		"auth", "can-i", verb, resource,
+		"--as", managerSubject,
+		asGroupFlag, serviceAccountsGroup,
+		asGroupFlag, namespacedServiceAccountsGroup,
+		asGroupFlag, authenticatedGroup,
+	}
 }
 
 // managerCanIWithArgs executes an authorization check and handles kubectl's denial exit status.

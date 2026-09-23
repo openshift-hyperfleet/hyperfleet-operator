@@ -16,7 +16,10 @@ limitations under the License.
 
 package e2e
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestParseCanIOutput(t *testing.T) {
 	t.Parallel()
@@ -40,5 +43,20 @@ func TestParseCanIOutput(t *testing.T) {
 				t.Errorf("parseCanIOutput(%q) = (%t, %t), want (%t, %t)", tc.output, allowed, recognized, tc.allowed, tc.recognized)
 			}
 		})
+	}
+}
+
+func TestManagerCanIArgs(t *testing.T) {
+	t.Parallel()
+
+	want := []string{
+		"auth", "can-i", getVerb, "deployments.apps",
+		"--as", "system:serviceaccount:hyperfleet-system:hyperfleet-operator-controller-manager",
+		asGroupFlag, "system:serviceaccounts",
+		asGroupFlag, "system:serviceaccounts:hyperfleet-system",
+		asGroupFlag, "system:authenticated",
+	}
+	if got := managerCanIArgs(getVerb, "deployments.apps"); !reflect.DeepEqual(got, want) {
+		t.Errorf("managerCanIArgs() = %v, want %v", got, want)
 	}
 }
