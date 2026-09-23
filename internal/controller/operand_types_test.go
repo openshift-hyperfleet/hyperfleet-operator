@@ -23,25 +23,23 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 func TestNamespacedOperandTypes(t *testing.T) {
 	t.Parallel()
 
 	want := []reflect.Type{
-		reflect.TypeOf(&appsv1.Deployment{}),
-		reflect.TypeOf(&corev1.Service{}),
-		reflect.TypeOf(&corev1.ServiceAccount{}),
-		reflect.TypeOf(&corev1.ConfigMap{}),
-		reflect.TypeOf(&rbacv1.Role{}),
-		reflect.TypeOf(&rbacv1.RoleBinding{}),
+		reflect.TypeFor[*appsv1.Deployment](),
+		reflect.TypeFor[*corev1.Service](),
+		reflect.TypeFor[*corev1.ServiceAccount](),
+		reflect.TypeFor[*corev1.ConfigMap](),
+		reflect.TypeFor[*rbacv1.Role](),
+		reflect.TypeFor[*rbacv1.RoleBinding](),
 	}
 
 	gotObjects := NamespacedOperandTypes()
 	got := make([]reflect.Type, 0, len(gotObjects))
 	for _, object := range gotObjects {
-		var _ client.Object = object
 		got = append(got, reflect.TypeOf(object))
 	}
 

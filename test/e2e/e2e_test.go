@@ -17,6 +17,7 @@ limitations under the License.
 package e2e
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -33,6 +34,8 @@ const namespace = "hyperfleet-system"
 
 // serviceAccountName created for the project
 const serviceAccountName = "hyperfleet-operator-controller-manager"
+
+const apiOperandName = "hyperfleet-api"
 
 // metricsServiceName is the name of the metrics service of the project
 const metricsServiceName = "hyperfleet-operator-controller-manager-metrics-service"
@@ -65,7 +68,7 @@ var _ = Describe("Manager", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
 
 		By("deploying the controller-manager")
-		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectImage))
+		cmd = exec.Command("make", "deploy", fmt.Sprintf("OPERATOR_IMG=%s", projectImage))
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
 	})
@@ -73,25 +76,26 @@ var _ = Describe("Manager", Ordered, func() {
 	// After all tests have been executed, clean up by undeploying the controller, uninstalling CRDs,
 	// and deleting the namespace.
 	AfterAll(func() {
-		By("cleaning up the HyperFleetConfig singleton")
-		cmd := exec.Command("kubectl", "delete", "hyperfleetconfig", "cluster", "--ignore-not-found=true")
-		_, _ = utils.Run(cmd)
+		var cleanupErrors []error
+		runCleanup := func(step string, cmd *exec.Cmd) {
+			By(step)
+			if _, err := utils.Run(cmd); err != nil {
+				cleanupErrors = append(cleanupErrors, fmt.Errorf("%s: %w", step, err))
+			}
+		}
 
-		By("cleaning up the curl pod for metrics")
-		cmd = exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace, "--ignore-not-found=true")
-		_, _ = utils.Run(cmd)
+		runCleanup("cleaning up the HyperFleetConfig singleton",
+			exec.Command("kubectl", "delete", "hyperfleetconfig", "cluster", "--ignore-not-found=true"))
+		runCleanup("cleaning up the curl pod for metrics",
+			exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace, "--ignore-not-found=true"))
+		runCleanup("undeploying the controller-manager",
+			exec.Command("make", "undeploy", "ignore-not-found=true"))
+		runCleanup("uninstalling CRDs",
+			exec.Command("make", "uninstall", "ignore-not-found=true"))
+		runCleanup("removing manager namespace",
+			exec.Command("kubectl", "delete", "ns", namespace, "--ignore-not-found=true"))
 
-		By("undeploying the controller-manager")
-		cmd = exec.Command("make", "undeploy")
-		_, _ = utils.Run(cmd)
-
-		By("uninstalling CRDs")
-		cmd = exec.Command("make", "uninstall")
-		_, _ = utils.Run(cmd)
-
-		By("removing manager namespace")
-		cmd = exec.Command("kubectl", "delete", "ns", namespace)
-		_, _ = utils.Run(cmd)
+		Expect(errors.Join(cleanupErrors...)).NotTo(HaveOccurred(), "e2e cleanup failed")
 	})
 
 	// After each test, check for failures and collect logs, events,
@@ -264,7 +268,7 @@ var _ = Describe("Manager", Ordered, func() {
 			operandVerbs := []string{"get", "list", "watch", "create", "update", "patch"}
 			for _, resource := range operandResources {
 				for _, verb := range operandVerbs {
-					Expect(managerCanI(verb, resource, namespace)).To(Equal("yes"),
+					Expect(managerCanI(verb, resource, namespace)).To(BeTrue(),
 						"manager should be allowed to %s %s in %s", verb, resource, namespace)
 				}
 			}
@@ -272,20 +276,20 @@ var _ = Describe("Manager", Ordered, func() {
 			By("verifying the manager cannot manage operands in another namespace")
 			for _, resource := range operandResources {
 				for _, verb := range operandVerbs {
-					Expect(managerCanI(verb, resource, "default")).To(Equal("no"),
+					Expect(managerCanI(verb, resource, "default")).To(BeFalse(),
 						"manager should not be allowed to %s %s in default", verb, resource)
 				}
-				Expect(managerCanI("delete", resource, namespace)).To(Equal("no"),
+				Expect(managerCanI("delete", resource, namespace)).To(BeFalse(),
 					"manager should not be allowed to delete %s; owner-reference GC handles cleanup", resource)
 			}
 
 			By("verifying cluster-scoped HyperFleetConfig access remains available")
 			for _, verb := range []string{"get", "list", "watch", "create", "update", "patch", "delete"} {
-				Expect(managerCanI(verb, "hyperfleetconfigs.hyperfleet.redhat.com", "")).To(Equal("yes"),
+				Expect(managerCanI(verb, "hyperfleetconfigs.hyperfleet.redhat.com", "")).To(BeTrue(),
 					"manager should retain cluster-scoped HyperFleetConfig %s access", verb)
 			}
-			Expect(managerCanISubresource("update", "hyperfleetconfigs", "status")).To(Equal("yes"))
-			Expect(managerCanISubresource("update", "hyperfleetconfigs", "finalizers")).To(Equal("yes"))
+			Expect(managerCanISubresource("update", "hyperfleetconfigs", "status")).To(BeTrue())
+			Expect(managerCanISubresource("update", "hyperfleetconfigs", "finalizers")).To(BeTrue())
 		})
 
 		It("should reconcile all operands in the operator namespace", func() {
@@ -316,12 +320,12 @@ var _ = Describe("Manager", Ordered, func() {
 
 			By("waiting for the controller to create every operand")
 			operands := [][2]string{
-				{"deployment", "hyperfleet-api"},
-				{"service", "hyperfleet-api"},
-				{"serviceaccount", "hyperfleet-api"},
+				{"deployment", apiOperandName},
+				{"service", apiOperandName},
+				{"serviceaccount", apiOperandName},
 				{"configmap", "hyperfleet-api-config"},
-				{"role", "hyperfleet-api"},
-				{"rolebinding", "hyperfleet-api"},
+				{"role", apiOperandName},
+				{"rolebinding", apiOperandName},
 			}
 			for _, operand := range operands {
 				resourceType, resourceName := operand[0], operand[1]
@@ -348,23 +352,49 @@ var _ = Describe("Manager", Ordered, func() {
 
 const managerSubject = "system:serviceaccount:" + namespace + ":" + serviceAccountName
 
-func managerCanI(verb, resource, resourceNamespace string) string {
+// managerCanI reports whether the controller manager is authorized for a resource action.
+func managerCanI(verb, resource, resourceNamespace string) bool {
 	args := []string{"auth", "can-i", verb, resource, "--as", managerSubject}
 	return managerCanIWithArgs(args, resourceNamespace)
 }
 
-func managerCanISubresource(verb, resource, subresource string) string {
+// managerCanISubresource reports whether the controller manager is authorized for a subresource action.
+func managerCanISubresource(verb, resource, subresource string) bool {
 	args := []string{"auth", "can-i", verb, resource, "--subresource", subresource, "--as", managerSubject}
 	return managerCanIWithArgs(args, "")
 }
 
-func managerCanIWithArgs(args []string, resourceNamespace string) string {
+// managerCanIWithArgs executes an authorization check and handles kubectl's denial exit status.
+func managerCanIWithArgs(args []string, resourceNamespace string) bool {
 	if resourceNamespace != "" {
 		args = append(args, "-n", resourceNamespace)
 	}
 	output, err := utils.Run(exec.Command("kubectl", args...))
+	allowed, recognized := parseCanIOutput(output)
+	if recognized {
+		if !allowed {
+			// kubectl auth can-i exits with status 1 when authorization is denied.
+			return false
+		}
+		Expect(err).NotTo(HaveOccurred(), "kubectl auth can-i failed: %v", args)
+		return true
+	}
+
 	Expect(err).NotTo(HaveOccurred(), "kubectl auth can-i failed: %v", args)
-	return strings.TrimSpace(output)
+	Fail(fmt.Sprintf("kubectl auth can-i returned unexpected output for %v: %q", args, output))
+	return false
+}
+
+// parseCanIOutput recognizes the allowed and denied output forms emitted by kubectl auth can-i.
+func parseCanIOutput(output string) (allowed, recognized bool) {
+	switch result := strings.TrimSpace(output); {
+	case result == "yes":
+		return true, true
+	case result == "no" || strings.HasPrefix(result, "no - "):
+		return false, true
+	default:
+		return false, false
+	}
 }
 
 // getMetricsOutput retrieves and returns the logs from the curl pod used to access the metrics endpoint.
