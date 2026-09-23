@@ -24,9 +24,7 @@ import (
 	"sync"
 	"time"
 
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -93,10 +91,11 @@ type HyperFleetConfigReconciler struct {
 // The operator reconciles operands with server-side apply (create/update/patch)
 // and relies on owner-reference garbage collection (run by kube-controller-manager,
 // not this operator) for cleanup, so it needs no delete permission on operands.
-// get;list;watch back the Owns() informer caches.
-// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch
-// +kubebuilder:rbac:groups="",resources=services;serviceaccounts;configmaps,verbs=get;list;watch;create;update;patch
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch
+// get;list;watch back the Owns() informer caches. All operands are rendered in
+// the operator namespace, so these grants must remain namespaced.
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch,namespace=hyperfleet-system
+// +kubebuilder:rbac:groups="",resources=services;serviceaccounts;configmaps,verbs=get;list;watch;create;update;patch,namespace=hyperfleet-system
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch,namespace=hyperfleet-system
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete,namespace=hyperfleet-system
 // Secrets are referenced (not owned): the operator reads partner-provided
 // database/TLS/JWKS Secrets to compute the config-rollout hash and watches them
@@ -256,14 +255,13 @@ func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Req
 // watches Secrets (which it references but does not own) so a rotation of a
 // referenced database/TLS/JWKS Secret re-triggers reconcile and rolls the pods.
 func (r *HyperFleetConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&hyperfleetv1alpha1.HyperFleetConfig{}).
-		Owns(&appsv1.Deployment{}).
-		Owns(&corev1.Service{}).
-		Owns(&corev1.ServiceAccount{}).
-		Owns(&corev1.ConfigMap{}).
-		Owns(&rbacv1.Role{}).
-		Owns(&rbacv1.RoleBinding{}).
+	controllerBuilder := ctrl.NewControllerManagedBy(mgr).
+		For(&hyperfleetv1alpha1.HyperFleetConfig{})
+	for _, operandType := range NamespacedOperandTypes() {
+		controllerBuilder = controllerBuilder.Owns(operandType)
+	}
+
+	return controllerBuilder.
 		Watches(
 			&corev1.Secret{},
 			handler.EnqueueRequestsFromMapFunc(r.mapSecretToConfig),

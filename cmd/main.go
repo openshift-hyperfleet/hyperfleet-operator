@@ -212,18 +212,13 @@ func main() {
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "85932bfd.redhat.com",
-		// Every referenced Secret (database/TLS/JWKS) lives in the operator's own
-		// namespace (see SecretReference), so the informer never needs to watch or
-		// cache Secrets anywhere else. Without this, the default cache would watch
-		// Secrets cluster-wide even though the secrets RBAC grant is already a
-		// namespaced Role, not a ClusterRole rule (see config/rbac/role.yaml and
-		// config/rbac/secrets_role_binding.yaml). HYPERFLEET-1529 tracks scoping
-		// the remaining operand-management verbs (deployments/services/etc.) the
-		// same way; this PR only narrows the secrets grant.
+		// Every referenced Secret and every rendered operand lives in the operator's
+		// own namespace (see SecretReference and bundle components), so these
+		// informers must not list or watch the same resource types cluster-wide.
+		// This cache scope is intentionally kept in lockstep with the namespaced
+		// operand RBAC markers in internal/controller/hyperfleetconfig_controller.go.
 		Cache: cache.Options{
-			ByObject: map[client.Object]cache.ByObject{
-				&corev1.Secret{}: {Namespaces: map[string]cache.Config{operatorNamespace: {}}},
-			},
+			ByObject: namespacedCacheByObject(operatorNamespace),
 		},
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
@@ -321,4 +316,16 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+func namespacedCacheByObject(operatorNamespace string) map[client.Object]cache.ByObject {
+	byObject := map[client.Object]cache.ByObject{
+		&corev1.Secret{}: {Namespaces: map[string]cache.Config{operatorNamespace: {}}},
+	}
+	for _, operandType := range controller.NamespacedOperandTypes() {
+		byObject[operandType] = cache.ByObject{
+			Namespaces: map[string]cache.Config{operatorNamespace: {}},
+		}
+	}
+	return byObject
 }
