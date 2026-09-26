@@ -2,4 +2,4 @@
 # Used in KONFLUX builds only
 # build-nudges-ref will update this image value
   - schema: olm.bundle
-    image: quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator-bundle@sha256:74648da0084ee837f926191d502c2d45eb4727f22ac13cbdb246aa5d482945a4
+    image: quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator-bundle@sha256:e6e5aff77f2f30f8019a134599e241263d0f954901387595d16d4278b1961e63
