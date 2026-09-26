@@ -11,10 +11,10 @@ patches:
       path: /spec/template/spec/containers/0/env/2
       value:
         name: RELATED_IMAGE_HYPERFLEET_OPERATOR
-        value: quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator@sha256:c2dd06bef6f5b5b503446f3a43db025ec1346ac9c2600d7eccf330967d804607
+        value: quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator@sha256:4eea4ab65def91fb944d01d2836382d459feac6679281ebce1544260cf48013c
     - op: replace
       path: /spec/template/spec/containers/0/image
-      value: quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator@sha256:c2dd06bef6f5b5b503446f3a43db025ec1346ac9c2600d7eccf330967d804607
+      value: quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator@sha256:4eea4ab65def91fb944d01d2836382d459feac6679281ebce1544260cf48013c
   target:
     kind: Deployment
     name: controller-manager
