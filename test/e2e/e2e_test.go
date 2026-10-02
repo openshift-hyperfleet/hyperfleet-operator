@@ -36,7 +36,10 @@ const namespace = "hyperfleet-system"
 // serviceAccountName created for the project
 const serviceAccountName = "hyperfleet-operator-controller-manager"
 
-const apiOperandName = "hyperfleet-api"
+const (
+	apiOperandName      = "hyperfleet-api"
+	postgresOperandName = "hyperfleet-postgres"
+)
 
 const (
 	getVerb     = "get"
@@ -302,17 +305,28 @@ var _ = Describe("Manager", Ordered, func() {
 			Expect(managerCanISubresource("update", "hyperfleetconfigs", "finalizers")).To(BeTrue())
 		})
 
-		It("should reconcile all operands in the operator namespace", func() {
+		It("should migrate a fresh database before the API becomes ready", func() {
+			By("deploying a disposable PostgreSQL database in the restricted namespace")
+			cmd := exec.Command("kubectl", "apply", "-f", "test/e2e/postgres.yaml", "-n", namespace)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("waiting for PostgreSQL to accept the migration connection")
+			cmd = exec.Command("kubectl", "rollout", "status", "deployment", postgresOperandName,
+				"-n", namespace, "--timeout=2m")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
 			By("creating the referenced database Secret")
-			cmd := exec.Command("kubectl", "create", "secret", "generic", "hyperfleet-db",
+			cmd = exec.Command("kubectl", "create", "secret", "generic", "hyperfleet-db",
 				"-n", namespace,
-				"--from-literal=db.host=db.example.com",
+				"--from-literal=db.host="+postgresOperandName,
 				"--from-literal=db.port=5432",
 				"--from-literal=db.name=hyperfleet",
 				"--from-literal=db.user=hyperfleet",
 				"--from-literal=db.password=password",
 			)
-			_, err := utils.Run(cmd)
+			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("creating the referenced JWKS Secret")
@@ -345,6 +359,20 @@ var _ = Describe("Manager", Ordered, func() {
 					g.Expect(err).NotTo(HaveOccurred(), "expected %s/%s to be created", resourceType, resourceName)
 				}).Should(Succeed())
 			}
+
+			By("waiting for the API Deployment to complete its first migration and rollout")
+			cmd = exec.Command("kubectl", "rollout", "status", "deployment", apiOperandName,
+				"-n", namespace, "--timeout=2m")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			apiPodName := waitForMigratedAPIPod("")
+
+			By("restarting the API Pod so its migration runs again")
+			cmd = exec.Command("kubectl", "delete", "pod", apiPodName, "-n", namespace)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			waitForMigratedAPIPod(apiPodName)
+
 		})
 
 		// +kubebuilder:scaffold:e2e-webhooks-checks
@@ -432,4 +460,39 @@ func getMetricsOutput() string {
 	Expect(err).NotTo(HaveOccurred(), "Failed to retrieve logs from curl pod")
 	Expect(metricsOutput).To(ContainSubstring("< HTTP/1.1 200 OK"))
 	return metricsOutput
+}
+
+// waitForMigratedAPIPod waits for a replacement API Pod, verifies that the
+// migration init container exited successfully, and returns its name. A
+// previous name forces the caller to observe a real replacement after restart.
+func waitForMigratedAPIPod(previousName string) string {
+	var podName string
+	Eventually(func(g Gomega) {
+		cmd := exec.Command("kubectl", "get", "pods",
+			"-l", "app.kubernetes.io/name="+apiOperandName,
+			"-o", "jsonpath={.items[0].metadata.name}", "-n", namespace)
+		output, err := utils.Run(cmd)
+		g.Expect(err).NotTo(HaveOccurred())
+		podName = strings.TrimSpace(output)
+		g.Expect(podName).NotTo(BeEmpty())
+		if previousName != "" {
+			g.Expect(podName).NotTo(Equal(previousName))
+		}
+
+		cmd = exec.Command("kubectl", "get", "pod", podName,
+			"-o", `jsonpath={.status.initContainerStatuses[?(@.name=="db-migrate")].state.terminated.exitCode}`,
+			"-n", namespace)
+		output, err = utils.Run(cmd)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(strings.TrimSpace(output)).To(Equal("0"))
+
+		cmd = exec.Command("kubectl", "get", "pod", podName,
+			"-o", `jsonpath={.status.containerStatuses[?(@.name=="hyperfleet-api")].ready}`,
+			"-n", namespace)
+		output, err = utils.Run(cmd)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(strings.TrimSpace(output)).To(Equal("true"))
+	}).Should(Succeed())
+
+	return podName
 }

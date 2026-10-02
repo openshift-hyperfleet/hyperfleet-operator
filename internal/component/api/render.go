@@ -85,6 +85,10 @@ const (
 	configFilePath  = "/etc/hyperfleet/config.yaml"
 	configVolume    = "config"
 	tmpVolume       = "tmp"
+
+	// migrationContainerName identifies the init container that brings the
+	// partner-provided database schema up to date before the API starts.
+	migrationContainerName = "db-migrate"
 )
 
 // Label keys are declared once to keep them in sync between the common and
@@ -123,14 +127,42 @@ func selectorLabels(name string) map[string]string {
 	}
 }
 
+// apiContainerResources returns a distinct value for each container while
+// keeping migration and runtime resource requirements identical.
+func apiContainerResources() corev1.ResourceRequirements {
+	return corev1.ResourceRequirements{
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("500m"),
+			corev1.ResourceMemory: resource.MustParse("512Mi"),
+		},
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("100m"),
+			corev1.ResourceMemory: resource.MustParse("128Mi"),
+		},
+	}
+}
+
+// apiContainerSecurityContext returns a distinct context for each container
+// while preserving the restricted security posture required by the API image.
+func apiContainerSecurityContext() *corev1.SecurityContext {
+	return &corev1.SecurityContext{
+		AllowPrivilegeEscalation: ptr.To(false),
+		ReadOnlyRootFilesystem:   ptr.To(true),
+		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+		SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+	}
+}
+
 // deployment builds the API Deployment. Image is injected by the operator.
 // Database credentials are delivered via a read-only Secret mount plus
 // HYPERFLEET_DATABASE_*_FILE env vars (HYPERFLEET-1603, api.DefaultImage
 // v0.4.0+), and TLS/JWKS Secrets are mounted read-only when the corresponding
 // spec fields are set (HYPERFLEET-1408). Replicas and resources remain the
-// fixed 1407 baseline (profile→resources is out of scope for 1408). The
-// config-hash pod-template annotation is added later by the controller, not
-// here.
+// fixed 1407 baseline (profile→resources is out of scope for 1408). A
+// db-migrate init container uses the same file-based configuration as serve,
+// so a fresh partner-provided database is ready before the API accepts
+// requests. The config-hash pod-template annotation is added later by the
+// controller, not here.
 func deployment(cr *hyperfleetv1alpha1.HyperFleetConfig, image, namespace string) *appsv1.Deployment {
 	dbSecret := cr.Spec.API.Database.SecretRef.Name
 
@@ -248,6 +280,17 @@ func deployment(cr *hyperfleetv1alpha1.HyperFleetConfig, image, namespace string
 						// image remains required to run as non-root on every platform.
 						RunAsNonRoot: ptr.To(true),
 					},
+					InitContainers: []corev1.Container{{
+						Name:            migrationContainerName,
+						Image:           image,
+						ImagePullPolicy: corev1.PullAlways, // match the API runtime container
+						WorkingDir:      "/app",
+						Command:         []string{"/app/hyperfleet-api", "migrate"},
+						Env:             env,
+						Resources:       apiContainerResources(),
+						SecurityContext: apiContainerSecurityContext(),
+						VolumeMounts:    volumeMounts,
+					}},
 					Containers: []corev1.Container{{
 						Name:            ResourceName,
 						Image:           image,
@@ -278,23 +321,9 @@ func deployment(cr *hyperfleetv1alpha1.HyperFleetConfig, image, namespace string
 							TimeoutSeconds:      3,
 							FailureThreshold:    3,
 						},
-						Resources: corev1.ResourceRequirements{
-							Limits: corev1.ResourceList{
-								corev1.ResourceCPU:    resource.MustParse("500m"),
-								corev1.ResourceMemory: resource.MustParse("512Mi"),
-							},
-							Requests: corev1.ResourceList{
-								corev1.ResourceCPU:    resource.MustParse("100m"),
-								corev1.ResourceMemory: resource.MustParse("128Mi"),
-							},
-						},
-						SecurityContext: &corev1.SecurityContext{
-							AllowPrivilegeEscalation: ptr.To(false),
-							ReadOnlyRootFilesystem:   ptr.To(true),
-							Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
-							SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
-						},
-						VolumeMounts: volumeMounts,
+						Resources:       apiContainerResources(),
+						SecurityContext: apiContainerSecurityContext(),
+						VolumeMounts:    volumeMounts,
 					}},
 					Volumes: volumes,
 				},
