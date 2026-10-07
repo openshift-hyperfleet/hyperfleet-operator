@@ -20,6 +20,8 @@ import (
 	"testing"
 )
 
+const wantNotSHA256Digest = "not a sha256 digest"
+
 var (
 	operatorImage = "registry.example.com/hyperfleet-operator@sha256:" + strings.Repeat("1", 64)
 	apiImage      = "registry.example.com/hyperfleet-api@sha256:" + strings.Repeat("2", 64)
@@ -64,10 +66,10 @@ func TestVerifyBuiltBundleCSV(t *testing.T) {
 		}, "not found in spec.relatedImages"},
 		{"tagged bundle image", func(s string) string {
 			return strings.ReplaceAll(s, apiImage, "registry.example.com/api:latest")
-		}, "not a sha256 digest"},
+		}, wantNotSHA256Digest},
 		{"URL-style bundle image", func(s string) string {
 			return strings.ReplaceAll(s, apiImage, "https://registry.example.com/api@sha256:"+strings.Repeat("4", 64))
-		}, "not a sha256 digest"},
+		}, wantNotSHA256Digest},
 		{"duplicate relatedImage", func(s string) string {
 			return s + "  - name: extra\n    image: " + apiImage + "\n"
 		}, "duplicate value of image"},
@@ -105,6 +107,114 @@ func TestVerifyBuiltBundleCSV(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestValidateCSVDataMalformedInput(t *testing.T) {
+	const wantParseError = "failed to parse CSV"
+	tests := []struct {
+		name string
+		data string
+		want string
+	}{
+		{
+			name: "invalid YAML syntax",
+			data: "spec:\n  relatedImages: [\n",
+			want: wantParseError,
+		},
+		{
+			name: "deployments is not a list",
+			data: "spec:\n  install:\n    spec:\n      deployments: \"not-a-list\"\n",
+			want: wantParseError,
+		},
+		{
+			name: "relatedImages is not a list",
+			data: "spec:\n  relatedImages: \"not-a-list\"\n",
+			want: wantParseError,
+		},
+		{
+			name: "empty document",
+			data: "",
+			want: "",
+		},
+		{
+			name: "relatedImages entry missing required image field",
+			data: "spec:\n  relatedImages:\n  - name: hyperfleet-api\n",
+			want: wantNotSHA256Digest,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := validateCSVData([]byte(tt.data))
+			if tt.want == "" {
+				if len(result.Errors) > 0 {
+					t.Fatalf("expected no errors, got: %v", result.Errors)
+				}
+				return
+			}
+			if len(result.Errors) == 0 {
+				t.Fatalf("expected an error containing %q, got none", tt.want)
+			}
+			if !strings.Contains(result.Errors[0].Detail, tt.want) {
+				t.Fatalf("expected error containing %q, got: %v", tt.want, result.Errors)
+			}
+		})
+	}
+}
+
+// TestValidateCSVDataIgnoresUnrelatedFields documents and locks in that CSV
+// fields outside this validator's input contract (see csvDocument) are
+// accepted, not rejected, even when present alongside a fully valid
+// related-images section.
+func TestValidateCSVDataIgnoresUnrelatedFields(t *testing.T) {
+	csv := `apiVersion: operators.coreos.com/v1alpha1
+kind: ClusterServiceVersion
+metadata:
+  name: hyperfleet-operator.v0.0.1
+  annotations:
+    capabilities: Basic Install
+spec:
+  displayName: HyperFleet Operator
+  version: 0.0.1
+  maturity: alpha
+  provider:
+    name: Red Hat
+  install:
+    strategy: deployment
+    spec:
+      permissions:
+      - serviceAccountName: controller-manager
+        rules: []
+      deployments:
+      - name: hyperfleet-operator-controller-manager
+        spec:
+          replicas: 1
+          strategy:
+            type: Recreate
+          template:
+            spec:
+              serviceAccountName: controller-manager
+              containers:
+              - name: manager
+                image: ` + operatorImage + `
+                resources:
+                  limits:
+                    cpu: 500m
+                livenessProbe:
+                  httpGet:
+                    path: /healthz
+                env:
+                - name: RELATED_IMAGE_HYPERFLEET_API
+                  value: ` + apiImage + `
+  relatedImages:
+  - name: hyperfleet-operator
+    image: ` + operatorImage + `
+  - name: hyperfleet-api
+    image: ` + apiImage + `
+`
+	result := validateCSVData([]byte(csv))
+	if len(result.Errors) > 0 {
+		t.Fatalf("expected unrelated fields to be ignored with no errors, got: %v", result.Errors)
 	}
 }
 

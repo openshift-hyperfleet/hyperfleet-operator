@@ -197,10 +197,18 @@ GOFLAGS ?= -trimpath
 # intentionally skip ldflags and rely on the Go toolchain's automatic VCS
 # stamping from the local .git checkout instead (see internal/version).
 
+# shell-quote safely single-quotes $(1) for use as one shell word.
+shell-quote = '$(subst ','\'',$(1))'
+
 .PHONY: check-container-tool
 check-container-tool:
 ifndef CONTAINER_TOOL
 	@echo "Error: No container tool found (docker or podman)"
+	@exit 1
+else ifeq ($(CONTAINER_TOOL),docker)
+else ifeq ($(CONTAINER_TOOL),podman)
+else
+	@echo "Error: Unsupported CONTAINER_TOOL" $(call shell-quote,$(CONTAINER_TOOL)) "(must be docker or podman)"
 	@exit 1
 endif
 
@@ -341,7 +349,7 @@ KUSTOMIZE_VARIANT ?= config/manifests/dev
 # For dev builds - unset validation of related images
 VALIDATE_RELATED_IMAGES ?= false
 .PHONY: bundle-build
-bundle-build: ## Builds the bundle and bundle image.
+bundle-build: check-container-tool ## Builds the bundle and bundle image.
 	cat config/manifests/dev/patch-images.yaml | envsubst > config/manifests/dev/kustomization.yaml
 	$(CONTAINER_TOOL) build -f bundle.Dockerfile \
 		--platform $(PLATFORM) \
@@ -376,7 +384,7 @@ catalog-render: opm ## Render the catalog from CATALOG_TEMPLATE using BUNDLE_IMG
 	@echo "Rendered $(CATALOG_RENDERED) with bundle image: $$CATALOG_BUNDLE_IMG"
 
 .PHONY: catalog-build
-catalog-build: catalog-render ## Render the catalog and build the catalog image
+catalog-build: check-container-tool catalog-render ## Render the catalog and build the catalog image
 	$(CONTAINER_TOOL) build \
 		-f catalog.Dockerfile \
 		--platform $(PLATFORM) \

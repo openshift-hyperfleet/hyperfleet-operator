@@ -50,6 +50,13 @@ type imageEntry struct {
 	Image string `json:"image"`
 }
 
+// csvDocument is this validator's input contract: only spec.relatedImages
+// and spec.install.spec.deployments[].spec.template.spec.{containers,
+// initContainers} (image, name, env) are read. Unmarshaling via
+// sigs.k8s.io/yaml ignores any other CSV field, so this is a related-images
+// consistency check, not a full CSV schema validator. A document that fails
+// to parse, or where one of these fields has the wrong shape, produces a
+// single "failed to parse CSV" error.
 type csvDocument struct {
 	Spec struct {
 		Install struct {
