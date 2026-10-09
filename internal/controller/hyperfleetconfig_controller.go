@@ -261,7 +261,7 @@ func (r *HyperFleetConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		controllerBuilder = controllerBuilder.Owns(operandType)
 	}
 
-	return controllerBuilder.
+	err := controllerBuilder.
 		Watches(
 			&corev1.Secret{},
 			handler.EnqueueRequestsFromMapFunc(r.mapSecretToConfig),
@@ -272,6 +272,17 @@ func (r *HyperFleetConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		).
 		Named("hyperfleetconfig").
 		Complete(r)
+	return wrapHyperFleetConfigControllerSetupError(err)
+}
+
+// wrapHyperFleetConfigControllerSetupError identifies the controller whose
+// registration failed while retaining the controller-runtime error for callers
+// that need to inspect it with errors.Is or errors.As.
+func wrapHyperFleetConfigControllerSetupError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("complete hyperfleetconfig controller: %w", err)
 }
 
 // mapSecretToConfig enqueues the singleton HyperFleetConfig when a Secret in the

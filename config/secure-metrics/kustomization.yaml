@@ -1,0 +1,61 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# This profile deploys the manager's secure metrics endpoint and the matching
+# GitOps-owned ServiceMonitor together. It intentionally does not create the
+# serving-certificate or scrape-credential Secrets: those are cluster-owned
+# credentials and must be provisioned before applying this overlay.
+resources:
+- ../default
+- ../prometheus
+
+patches:
+- path: manager_secure_patch.yaml
+  target:
+    kind: Deployment
+    name: controller-manager
+- path: monitor_secure_patch.yaml
+  target:
+    kind: ServiceMonitor
+    group: monitoring.coreos.com
+    version: v1
+    name: controller-manager-metrics-monitor
+
+# Derive SNI from the rendered Service, after the default overlay applies its
+# name prefix and namespace. This prevents a non-default namespace or prefix
+# from leaving the ServiceMonitor with a certificate name for hyperfleet-system.
+replacements:
+- source:
+    kind: Service
+    version: v1
+    name: controller-manager-metrics-service
+    fieldPath: metadata.name
+  targets:
+  - select:
+      kind: ServiceMonitor
+      group: monitoring.coreos.com
+      version: v1
+      name: controller-manager-metrics-monitor
+    fieldPaths:
+    - spec.endpoints.0.tlsConfig.serverName
+    options:
+      delimiter: '.'
+      index: 0
+      create: true
+- source:
+    kind: Service
+    version: v1
+    name: controller-manager-metrics-service
+    fieldPath: metadata.namespace
+  targets:
+  - select:
+      kind: ServiceMonitor
+      group: monitoring.coreos.com
+      version: v1
+      name: controller-manager-metrics-monitor
+    fieldPaths:
+    - spec.endpoints.0.tlsConfig.serverName
+    options:
+      delimiter: '.'
+      index: 1
+      create: true

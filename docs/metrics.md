@@ -13,13 +13,11 @@ Metrics are exposed at:
 - **Protocol**: plain HTTP (`--metrics-secure=false` by default)
 - **Format**: OpenMetrics/Prometheus text format
 
-> The operator's ServiceMonitor (bundled at `config/prometheus/monitor.yaml`, and
-> the equivalent created at runtime by `internal/servicemonitor`) always scrapes
-> with `scheme: http`, matching the default above. Running with
-> `--metrics-secure=true` switches the endpoint to HTTPS with authn/authz, but
-> neither ServiceMonitor is updated to match — scrapes will fail until you
-> configure `scheme`/`tlsConfig`/`bearerToken` yourself (see
-> `config/prometheus/monitor_tls_patch.yaml`).
+The operator can create a ServiceMonitor at runtime when the Prometheus Operator
+API is available. The default ServiceMonitor uses HTTP, matching the default
+metrics endpoint. A secure ServiceMonitor is rendered when `--metrics-secure=true`
+and its required trust and authentication references are supplied; see
+[Secure metrics scraping](#secure-metrics-scraping).
 
 The operator's custom collectors register into controller-runtime's registry, so
 they are served on the **same** `/metrics` endpoint as the built-in
@@ -273,11 +271,12 @@ hyperfleet_operator_up
 
 ## Prometheus Operator Integration
 
-The operator creates its own `ServiceMonitor` (`controller-manager-metrics-monitor`)
-at runtime so Prometheus scrapes the `:9090` endpoint over plain HTTP. The
-bootstrap is conditional: it runs only when the cluster serves the Prometheus
-Operator API (`monitoring.coreos.com/v1`), and is skipped — with a log line — when
-that CRD is absent. Metrics remain available on `:9090` either way. See the
+The operator creates and owns its `ServiceMonitor`
+(`controller-manager-metrics-monitor`) at runtime when
+`--metrics-service-monitor-enabled=true` (the default). The bootstrap is
+conditional: it runs only when the cluster serves the Prometheus Operator API
+(`monitoring.coreos.com/v1`), and is skipped — with a log line — when that CRD is
+absent. Metrics remain available on `:9090` either way. See the
 `internal/servicemonitor` package.
 
 The `ServiceMonitor` is intentionally **not** shipped in the OLM bundle. OLM
@@ -290,7 +289,51 @@ runtime bootstrap above degrades gracefully instead.
 A cluster that installs the Prometheus Operator *after* the operator started picks
 the `ServiceMonitor` up on the operator's next restart. For GitOps, the equivalent
 static manifest remains available at `config/prometheus/monitor.yaml` and can be
-applied directly (requires the `ServiceMonitor` CRD).
+applied directly (requires the `ServiceMonitor` CRD). GitOps and the runtime
+bootstrap must not manage the same object: set
+`--metrics-service-monitor-enabled=false` when applying the static manifest.
+
+### Secure metrics scraping
+
+`--metrics-secure=true` enables controller-runtime TLS plus Kubernetes
+authentication and authorization on `/metrics`. A ServiceMonitor in this mode
+must use HTTPS and provide all of the following:
+
+- A mounted, stable server certificate for the manager
+  (`--metrics-cert-path`, normally from `metrics-server-cert`). Controller-runtime
+  self-signed development certificates are not a supported production scrape
+  trust source.
+- `--metrics-service-monitor-ca-secret-name` and
+  `--metrics-service-monitor-ca-secret-key`, naming the CA that verifies that
+  server certificate.
+- `--metrics-service-monitor-server-name`, matching the serving certificate DNS
+  name, for example
+  `hyperfleet-operator-controller-manager-metrics-service.hyperfleet-system.svc`.
+- `--metrics-service-monitor-authorization-secret-name` and
+  `--metrics-service-monitor-authorization-secret-key`, naming a Secret in the
+  ServiceMonitor namespace containing a bearer credential.
+
+The credential subject must be authorized to `get` the non-resource URL
+`/metrics`, normally by binding it to the shipped `metrics-reader` ClusterRole.
+The Prometheus Operator must also be allowed to read the referenced Secrets.
+The operator neither creates nor copies scrape credentials, and does not use
+`bearerTokenFile`; cluster owners are responsible for secure credential delivery
+and rotation. On a cluster without the optional ServiceMonitor API, secure
+metrics still starts normally: validation of ServiceMonitor-only CA and bearer
+settings happens only after the API is discovered.
+
+For GitOps, use the checked-in `config/secure-metrics` Kustomize overlay, rather
+than applying the plain-HTTP `config/prometheus` base. It configures the manager
+with secure serving, mounts `metrics-server-cert`, disables the runtime
+bootstrapper, and emits the corresponding static ServiceMonitor. Its TLS server
+name is derived from the rendered metrics Service, so changing the Kustomize
+namespace or name prefix produces the matching `<service>.<namespace>.svc` name
+instead of retaining a `hyperfleet-system` literal. Before applying it, create
+`metrics-server-cert` (`ca.crt`, `tls.crt`, and `tls.key`) and
+`hyperfleet-metrics-scrape-credentials` (`token`) in the operator namespace.
+The secure overlay sets `scheme: https`, CA verification, and Secret-backed
+bearer authorization. It deliberately does not set `insecureSkipVerify` or
+client TLS credentials: the manager uses bearer-token authentication, not mTLS.
 
 ## Related Documentation
 

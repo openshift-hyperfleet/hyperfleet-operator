@@ -83,6 +83,60 @@ type Bootstrapper struct {
 	Config *rest.Config
 	// Namespace is the operator's own namespace, where the ServiceMonitor is created.
 	Namespace string
+	// ScrapeConfig controls the protocol and, when HTTPS is enabled, the trust and
+	// authentication material referenced by the ServiceMonitor.
+	ScrapeConfig ScrapeConfig
+	// serviceMonitorAvailability is an optional test seam. Production uses
+	// serviceMonitorAvailable, which probes API discovery.
+	serviceMonitorAvailability func(*rest.Config) (bool, error)
+}
+
+// ScrapeConfig describes the ServiceMonitor endpoint emitted by Bootstrapper.
+// Secret references are deliberately names and keys rather than secret contents:
+// the Prometheus Operator reads the referenced credentials, and the operator
+// never creates or copies long-lived scrape tokens.
+type ScrapeConfig struct {
+	Secure bool
+	// ServingCertificateConfigured is true only when the manager was configured
+	// with a mounted serving certificate. In secure mode controller-runtime can
+	// otherwise generate an ephemeral self-signed certificate that cannot match
+	// the CA Secret a ServiceMonitor is configured to trust.
+	ServingCertificateConfigured bool
+
+	TLSCASecretName string
+	TLSCASecretKey  string
+	ServerName      string
+
+	AuthorizationSecretName string
+	AuthorizationSecretKey  string
+}
+
+// Validate ensures secure metrics never produce a ServiceMonitor that points at
+// an HTTPS endpoint without a stable, CA-verifiable serving certificate and the
+// trust and bearer credentials required by the controller-runtime authentication
+// and authorization filter.
+func (c ScrapeConfig) Validate() error {
+	if !c.Secure {
+		return nil
+	}
+	for _, required := range []struct {
+		name  string
+		value string
+	}{
+		{name: "tls ca secret name", value: c.TLSCASecretName},
+		{name: "tls ca secret key", value: c.TLSCASecretKey},
+		{name: "tls server name", value: c.ServerName},
+		{name: "authorization secret name", value: c.AuthorizationSecretName},
+		{name: "authorization secret key", value: c.AuthorizationSecretKey},
+	} {
+		if required.value == "" {
+			return fmt.Errorf("secure metrics servicemonitor requires %s", required.name)
+		}
+	}
+	if !c.ServingCertificateConfigured {
+		return fmt.Errorf("secure metrics servicemonitor requires --metrics-cert-path")
+	}
+	return nil
 }
 
 // NeedLeaderElection makes the bootstrap run only on the leader, so a multi-replica
@@ -90,14 +144,21 @@ type Bootstrapper struct {
 func (b *Bootstrapper) NeedLeaderElection() bool { return true }
 
 // Start ensures the ServiceMonitor exists when the Prometheus Operator API is
-// available. It is best-effort: every failure is logged and swallowed so metrics
-// bootstrap never crashes the manager or blocks reconciliation. A cluster that
-// installs the Prometheus Operator after the operator started picks the
-// ServiceMonitor up on the operator's next restart.
+// available. Discovery and API-operation failures are best-effort: they are
+// logged and swallowed so metrics bootstrap never crashes the manager or blocks
+// reconciliation. An invalid secure scrape configuration is returned only after
+// confirming that the ServiceMonitor API is installed: it must not silently
+// publish an unusable or untrusted secure monitor, while a generic Kubernetes
+// cluster without that optional API must still be able to serve secure metrics.
+// A cluster that installs the Prometheus Operator after the operator started
+// picks the ServiceMonitor up on the operator's next restart.
 func (b *Bootstrapper) Start(ctx context.Context) error {
 	log := logf.FromContext(ctx).WithName("servicemonitor")
-
-	available, err := serviceMonitorAvailable(b.Config)
+	availability := b.serviceMonitorAvailability
+	if availability == nil {
+		availability = serviceMonitorAvailable
+	}
+	available, err := availability(b.Config)
 	if err != nil {
 		// Discovery failed (e.g. a transient API server error). Skip rather than
 		// crash: metrics are still exposed on :9090 and a restart retries.
@@ -109,6 +170,9 @@ func (b *Bootstrapper) Start(ctx context.Context) error {
 			"skipping ServiceMonitor creation. Install the Prometheus Operator and restart the operator to enable " +
 			"scraping, or apply config/prometheus manually.")
 		return nil
+	}
+	if err := b.ScrapeConfig.Validate(); err != nil {
+		return fmt.Errorf("validate ServiceMonitor scrape configuration: %w", err)
 	}
 
 	cl, err := client.New(b.Config, client.Options{})
@@ -128,7 +192,7 @@ func (b *Bootstrapper) Start(ctx context.Context) error {
 		return nil
 	}
 
-	sm := buildServiceMonitor(b.Namespace, svc)
+	sm := buildServiceMonitor(b.Namespace, svc, b.ScrapeConfig)
 	applyConfig := client.ApplyConfigurationFromUnstructured(sm)
 	if err := cl.Apply(ctx, applyConfig, client.FieldOwner(appName), client.ForceOwnership); err != nil {
 		log.Error(err, "failed to apply operator ServiceMonitor",
@@ -181,12 +245,11 @@ func hasServiceMonitorKind(list *metav1.APIResourceList) bool {
 // the operator's install (and its metrics Service with it) garbage-collects the
 // ServiceMonitor too, instead of leaving it behind as an orphan.
 //
-// The endpoint's scheme is hardcoded to "http", matching the HyperFleet metrics
-// standard's plain-HTTP default (--metrics-secure=false). Bootstrapper does not
-// know the operator's --metrics-secure setting, so if it is run with
-// --metrics-secure=true this ServiceMonitor will scrape an HTTPS+authn/authz
-// endpoint over plain HTTP and fail. See config/prometheus/monitor.yaml.
-func buildServiceMonitor(namespace string, owner *corev1.Service) *unstructured.Unstructured {
+// The endpoint follows ScrapeConfig. Plain HTTP is the HyperFleet default. Secure
+// metrics use HTTPS, CA verification, and Secret-backed bearer authorization;
+// they never disable certificate verification or use a token file from the
+// Prometheus container filesystem.
+func buildServiceMonitor(namespace string, owner *corev1.Service, scrapeConfig ScrapeConfig) *unstructured.Unstructured {
 	sm := &unstructured.Unstructured{}
 	sm.SetGroupVersionKind(schema.GroupVersionKind{Group: smGroup, Version: smVersion, Kind: smKind})
 	sm.SetName(serviceMonitorName)
@@ -202,6 +265,32 @@ func buildServiceMonitor(namespace string, owner *corev1.Service) *unstructured.
 		Name:       owner.Name,
 		UID:        owner.UID,
 	}})
+	endpoint := map[string]any{
+		"path":     "/metrics",
+		"port":     "metrics", // matches the metrics Service port name
+		"scheme":   "http",
+		"interval": "30s",
+	}
+	if scrapeConfig.Secure {
+		endpoint["scheme"] = "https"
+		endpoint["tlsConfig"] = map[string]any{
+			"serverName": scrapeConfig.ServerName,
+			"ca": map[string]any{
+				"secret": map[string]any{
+					"name": scrapeConfig.TLSCASecretName,
+					"key":  scrapeConfig.TLSCASecretKey,
+				},
+			},
+		}
+		endpoint["authorization"] = map[string]any{
+			"type": "Bearer",
+			"credentials": map[string]any{
+				"name": scrapeConfig.AuthorizationSecretName,
+				"key":  scrapeConfig.AuthorizationSecretKey,
+			},
+		}
+	}
+
 	sm.Object["spec"] = map[string]any{
 		"selector": map[string]any{
 			"matchLabels": map[string]any{
@@ -210,12 +299,7 @@ func buildServiceMonitor(namespace string, owner *corev1.Service) *unstructured.
 			},
 		},
 		"endpoints": []any{
-			map[string]any{
-				"path":     "/metrics",
-				"port":     "metrics", // matches the metrics Service port name
-				"scheme":   "http",
-				"interval": "30s",
-			},
+			endpoint,
 		},
 	}
 	return sm

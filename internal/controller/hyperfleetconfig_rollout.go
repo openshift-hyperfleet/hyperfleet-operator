@@ -26,6 +26,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"slices"
 	"strings"
@@ -104,34 +105,96 @@ func blockDiscoveryDial(_, address string, _ syscall.RawConn) error {
 	if err != nil {
 		return fmt.Errorf("parse dial address %q: %w", address, err)
 	}
-	ip := net.ParseIP(host)
-	if ip == nil {
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
 		return fmt.Errorf("refusing to dial non-IP discovery address %q", host)
 	}
+	// IPv4-mapped IPv6 is itself a non-globally-reachable IANA special-purpose
+	// allocation. net.ParseIP normalizes it to IPv4 and would lose that fact, so
+	// reject it before converting to net.IP for the rest of the policy.
+	if addr.Is4In6() {
+		return fmt.Errorf("refusing OIDC discovery dial to IPv4-mapped address %s", addr)
+	}
+	ip := addr.AsSlice()
 	if isDisallowedDiscoveryTarget(ip) {
 		return fmt.Errorf("refusing OIDC discovery dial to disallowed address %s", ip)
 	}
 	return nil
 }
 
-// reservedDiscoveryCIDRs are non-public destination ranges the net.IP.IsXxx
-// helpers do not classify. net.IP.IsPrivate covers RFC1918 and IPv6 ULA
-// (fc00::/7) but not, notably, the shared CGNAT space (100.64.0.0/10, RFC 6598)
-// a partner-controlled issuer could use to pivot into a carrier- or
-// cloud-internal host. The remainder are IANA special-purpose ranges that are
-// never a legitimate public IdP, so blocking them costs nothing and closes the
-// gap left by relying on IsPrivate alone.
-var reservedDiscoveryCIDRs = []*net.IPNet{
-	mustCIDR("0.0.0.0/8"),       // "this host on this network" (RFC 1122)
-	mustCIDR("100.64.0.0/10"),   // shared address space / CGNAT (RFC 6598)
-	mustCIDR("192.0.0.0/24"),    // IETF protocol assignments (RFC 6890)
-	mustCIDR("192.0.2.0/24"),    // documentation TEST-NET-1 (RFC 5737)
-	mustCIDR("198.18.0.0/15"),   // benchmarking (RFC 2544)
-	mustCIDR("198.51.100.0/24"), // documentation TEST-NET-2 (RFC 5737)
-	mustCIDR("203.0.113.0/24"),  // documentation TEST-NET-3 (RFC 5737)
-	mustCIDR("240.0.0.0/4"),     // reserved / former class E (RFC 1112)
-	mustCIDR("100::/64"),        // discard-only (RFC 6666)
-	mustCIDR("2001:db8::/32"),   // documentation (RFC 3849)
+// specialPurposeDiscoveryRange is one address block from IANA's IPv4 or IPv6
+// Special-Purpose Address Space registries. globallyReachable is the registry's
+// "Globally Reachable" value. The policy deliberately permits only an explicit
+// True; False, N/A, and retired records are not suitable destinations for a
+// partner-controlled OIDC discovery request.
+type specialPurposeDiscoveryRange struct {
+	network           *net.IPNet
+	globallyReachable bool
+}
+
+// specialPurposeDiscoveryRanges is a static snapshot of the IANA IPv4 and IPv6
+// Special-Purpose Address Space registries, retrieved 2026-10-06 (registry
+// updated 2025-10-09). Keep every registry record here, including records that
+// are already caught by net.IP's predicates and the explicitly globally
+// reachable exceptions nested inside broader special-purpose ranges. Selection
+// below is longest-prefix-match, so, for example, the public 192.0.0.9/32 and
+// 2001:1::1/128 exceptions remain reachable while their parent allocations are
+// denied. See docs/hyperfleetconfig-reference.md for the policy and source URLs.
+var specialPurposeDiscoveryRanges = []specialPurposeDiscoveryRange{
+	// IPv4 Special-Purpose Address Space.
+	specialPurposeRange("0.0.0.0/8", false),
+	specialPurposeRange("0.0.0.0/32", false),
+	specialPurposeRange("10.0.0.0/8", false),
+	specialPurposeRange("100.64.0.0/10", false),
+	specialPurposeRange("127.0.0.0/8", false),
+	specialPurposeRange("169.254.0.0/16", false),
+	specialPurposeRange("172.16.0.0/12", false),
+	specialPurposeRange("192.0.0.0/24", false),
+	specialPurposeRange("192.0.0.0/29", false),
+	specialPurposeRange("192.0.0.8/32", false),
+	specialPurposeRange("192.0.0.9/32", true),
+	specialPurposeRange("192.0.0.10/32", true),
+	specialPurposeRange("192.0.0.170/32", false),
+	specialPurposeRange("192.0.0.171/32", false),
+	specialPurposeRange("192.0.2.0/24", false),
+	specialPurposeRange("192.31.196.0/24", true),
+	specialPurposeRange("192.52.193.0/24", true),
+	specialPurposeRange("192.88.99.0/24", false), // retired 6to4 relay anycast
+	specialPurposeRange("192.88.99.2/32", false),
+	specialPurposeRange("192.168.0.0/16", false),
+	specialPurposeRange("192.175.48.0/24", true),
+	specialPurposeRange("198.18.0.0/15", false),
+	specialPurposeRange("198.51.100.0/24", false),
+	specialPurposeRange("203.0.113.0/24", false),
+	specialPurposeRange("240.0.0.0/4", false),
+	specialPurposeRange("255.255.255.255/32", false),
+
+	// IPv6 Special-Purpose Address Space.
+	specialPurposeRange("::1/128", false),
+	specialPurposeRange("::/128", false),
+	specialPurposeRange("::ffff:0:0/96", false),
+	specialPurposeRange("64:ff9b::/96", true),
+	specialPurposeRange("64:ff9b:1::/48", false),
+	specialPurposeRange("100::/64", false),
+	specialPurposeRange("100:0:0:1::/64", false),
+	specialPurposeRange("2001::/23", false),
+	specialPurposeRange("2001::/32", false), // Teredo: registry value N/A
+	specialPurposeRange("2001:1::1/128", true),
+	specialPurposeRange("2001:1::2/128", true),
+	specialPurposeRange("2001:1::3/128", true),
+	specialPurposeRange("2001:2::/48", false),
+	specialPurposeRange("2001:3::/32", true),
+	specialPurposeRange("2001:4:112::/48", true),
+	specialPurposeRange("2001:10::/28", false), // retired ORCHID
+	specialPurposeRange("2001:20::/28", true),
+	specialPurposeRange("2001:30::/28", true),
+	specialPurposeRange("2001:db8::/32", false),
+	specialPurposeRange("2002::/16", false), // 6to4: registry value N/A
+	specialPurposeRange("2620:4f:8000::/48", true),
+	specialPurposeRange("3fff::/20", false),
+	specialPurposeRange("5f00::/16", false),
+	specialPurposeRange("fc00::/7", false),
+	specialPurposeRange("fe80::/10", false),
 }
 
 // mustCIDR parses a CIDR literal that is a compile-time constant; a parse error
@@ -144,21 +207,60 @@ func mustCIDR(s string) *net.IPNet {
 	return n
 }
 
+func specialPurposeRange(cidr string, globallyReachable bool) specialPurposeDiscoveryRange {
+	return specialPurposeDiscoveryRange{
+		network:           mustCIDR(cidr),
+		globallyReachable: globallyReachable,
+	}
+}
+
+// specialPurposeGloballyReachable returns the reachability value for the most
+// specific IANA special-purpose allocation containing ip. The bool result is
+// false when no IANA special-purpose record applies.
+func specialPurposeGloballyReachable(ip net.IP) (globallyReachable, found bool) {
+	mostSpecificBits := -1
+	ipv4 := ip.To4() != nil
+	for _, r := range specialPurposeDiscoveryRanges {
+		ones, bits := r.network.Mask.Size()
+		// net.IPNet.Contains treats an IPv4 address as compatible with some
+		// IPv6 networks (notably ::/128) because net.IP represents IPv4 in a
+		// 16-byte form. Address-family filtering keeps the two IANA registries
+		// independent before evaluating prefix containment.
+		if ipv4 != (bits == net.IPv4len*8) {
+			continue
+		}
+		if !r.network.Contains(ip) {
+			continue
+		}
+		if ones <= mostSpecificBits {
+			continue
+		}
+		mostSpecificBits = ones
+		globallyReachable = r.globallyReachable
+		found = true
+	}
+	return globallyReachable, found
+}
+
 // isDisallowedDiscoveryTarget reports whether ip is a loopback, private,
 // link-local, unspecified, or multicast address, or falls in one of the
-// reserved ranges above (CGNAT and other non-public IANA special-purpose
-// blocks) — the set of destinations an outbound OIDC discovery request must
-// never reach, since spec.api.auth.issuer is partner-controlled. IsPrivate
-// alone is insufficient: it does not cover CGNAT (100.64.0.0/10).
+// ranges above (including CGNAT and every non-public IANA special-purpose
+// allocation) — the set of destinations an outbound OIDC discovery request
+// must never reach, since spec.api.auth.issuer is partner-controlled.
+// IsPrivate alone is insufficient: it does not cover CGNAT (100.64.0.0/10),
+// documentation space, and several protocol allocations.
 func isDisallowedDiscoveryTarget(ip net.IP) bool {
+	// IANA's more-specific globally reachable records take precedence over the
+	// standard-library category helpers. For example, current Go releases
+	// classify 192.0.0.9 as private because it sits in the broader IETF protocol
+	// allocation, but IANA explicitly marks that PCP anycast /32 globally
+	// reachable.
+	if globallyReachable, found := specialPurposeGloballyReachable(ip); found {
+		return !globallyReachable
+	}
 	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
 		ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
 		return true
-	}
-	for _, n := range reservedDiscoveryCIDRs {
-		if n.Contains(ip) {
-			return true
-		}
 	}
 	return false
 }

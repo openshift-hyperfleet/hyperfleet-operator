@@ -21,6 +21,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	. "github.com/onsi/gomega"
@@ -261,33 +262,93 @@ func TestResolveJWKSURLFailsWithoutCache(t *testing.T) {
 }
 
 func TestIsDisallowedDiscoveryTarget(t *testing.T) {
-	g := NewWithT(t)
+	tests := []struct {
+		name       string
+		address    string
+		disallowed bool
+	}{
+		// net.IP categories that are disallowed independently of the IANA table.
+		{"IPv4 loopback", "127.0.0.1", true},
+		{"IPv6 loopback", "::1", true},
+		{"RFC1918 private", "10.0.0.5", true},
+		{"IPv6 unique local", "fc00::1", true},
+		{"link-local cloud metadata", "169.254.169.254", true},
+		{"unspecified", "0.0.0.0", true},
+		{"multicast", "224.0.0.1", true},
 
-	disallowed := []string{
-		"127.0.0.1", "::1", // loopback
-		"10.0.0.5", "172.16.0.5", "192.168.1.5", // RFC1918 private
-		"169.254.169.254", "169.254.1.1", // link-local, incl. cloud metadata
-		"0.0.0.0",       // unspecified
-		"224.0.0.1",     // multicast
-		"fc00::1",       // IPv6 unique local
-		"100.64.0.1",    // CGNAT / shared address space (RFC 6598)
-		"100.127.255.1", // CGNAT upper bound
-		"0.1.2.3",       // "this host on this network" (RFC 1122)
-		"192.0.0.1",     // IETF protocol assignments
-		"198.18.0.1",    // benchmarking
-		"240.0.0.1",     // reserved / former class E
-		"2001:db8::1",   // IPv6 documentation
-	}
-	for _, s := range disallowed {
-		g.Expect(isDisallowedDiscoveryTarget(net.ParseIP(s))).To(BeTrue(), s)
-	}
+		// IPv4 IANA categories and their boundary addresses.
+		{"IPv4 this network", "0.1.2.3", true},
+		{"IPv4 shared address lower boundary", "100.64.0.0", true},
+		{"IPv4 shared address upper boundary", "100.127.255.255", true},
+		{"IPv4 IETF protocol assignment", "192.0.0.1", true},
+		{"IPv4 dummy address", "192.0.0.8", true},
+		{"IPv4 NAT64 discovery", "192.0.0.170", true},
+		{"IPv4 documentation", "192.0.2.1", true},
+		{"IPv4 retired relay anycast lower boundary", "192.88.99.0", true},
+		{"IPv4 retired relay anycast upper boundary", "192.88.99.255", true},
+		{"IPv4 private use", "192.168.1.5", true},
+		{"IPv4 benchmarking", "198.18.0.1", true},
+		{"IPv4 documentation TEST-NET-2", "198.51.100.1", true},
+		{"IPv4 documentation TEST-NET-3", "203.0.113.1", true},
+		{"IPv4 reserved", "240.0.0.1", true},
 
-	allowed := []string{
-		"8.8.8.8", "1.1.1.1", "2001:4860:4860::8888",
-		"100.63.255.255", "100.128.0.0", // just outside the CGNAT block, still public
+		// IPv6 IANA categories and their boundary addresses.
+		{"IPv4-mapped IPv6", "::ffff:192.0.2.1", true},
+		{"IPv6 translation prefix with no global reachability", "64:ff9b:1::1", true},
+		{"IPv6 discard-only", "100::1", true},
+		{"IPv6 dummy prefix", "100:0:0:1::1", true},
+		{"IPv6 IETF protocol assignment", "2001:0:ffff::1", true},
+		{"IPv6 Teredo N/A reachability", "2001::1", true},
+		{"IPv6 benchmarking lower boundary", "2001:2::", true},
+		{"IPv6 benchmarking upper boundary", "2001:2:0:ffff:ffff:ffff:ffff:ffff", true},
+		{"IPv6 retired ORCHID", "2001:10::1", true},
+		{"IPv6 documentation", "2001:db8::1", true},
+		{"IPv6 6to4 N/A reachability", "2002::1", true},
+		{"IPv6 documentation 3fff", "3fff::1", true},
+		{"IPv6 SRv6 SID", "5f00::1", true},
+		{"IPv6 link-local", "fe80::1", true},
+
+		// Explicitly globally reachable special-purpose exceptions must remain allowed.
+		{"IPv4 PCP anycast exception", "192.0.0.9", false},
+		{"IPv4 TURN anycast exception", "192.0.0.10", false},
+		{"IPv4 AS112 exception", "192.31.196.1", false},
+		{"IPv4 AMT exception", "192.52.193.1", false},
+		{"IPv4 direct-delegation AS112 exception", "192.175.48.1", false},
+		{"IPv6 translation exception", "64:ff9b::1", false},
+		{"IPv6 PCP anycast exception", "2001:1::1", false},
+		{"IPv6 TURN anycast exception", "2001:1::2", false},
+		{"IPv6 DNS-SD anycast exception", "2001:1::3", false},
+		{"IPv6 AMT exception", "2001:3::1", false},
+		{"IPv6 AS112 exception", "2001:4:112::1", false},
+		{"IPv6 ORCHIDv2 exception", "2001:20::1", false},
+		{"IPv6 DETs exception", "2001:30::1", false},
+		{"IPv6 direct-delegation AS112 exception", "2620:4f:8000::1", false},
+
+		// Adjacent public space proves the boundaries do not silently widen the deny list.
+		{"IPv4 before shared address space", "100.63.255.255", false},
+		{"IPv4 after shared address space", "100.128.0.0", false},
+		{"IPv4 before retired relay anycast", "192.88.98.255", false},
+		{"IPv4 after retired relay anycast", "192.88.100.0", false},
+		// These addresses are immediately adjacent to the /48 benchmarking
+		// allocation, but remain in the broader 2001::/23 IETF allocation and
+		// are therefore correctly denied. The next line proves the outer /23
+		// boundary itself does not overreach.
+		{"IPv6 before benchmarking remains in IETF allocation", "2001:1:ffff:ffff:ffff:ffff:ffff:ffff", true},
+		{"IPv6 after benchmarking remains in IETF allocation", "2001:2:1::", true},
+		{"IPv6 after IETF allocation", "2001:200::", false},
+		{"ordinary public IPv4", "8.8.8.8", false},
+		{"ordinary public IPv6", "2001:4860:4860::8888", false},
 	}
-	for _, s := range allowed {
-		g.Expect(isDisallowedDiscoveryTarget(net.ParseIP(s))).To(BeFalse(), s)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ip := net.ParseIP(tc.address)
+			if ip == nil {
+				t.Fatalf("net.ParseIP(%q) = nil", tc.address)
+			}
+			if got := isDisallowedDiscoveryTarget(ip); got != tc.disallowed {
+				t.Errorf("isDisallowedDiscoveryTarget(%s) = %t, want %t", tc.address, got, tc.disallowed)
+			}
+		})
 	}
 }
 
@@ -315,6 +376,13 @@ func TestDiscoveryHTTPClientBlocksLoopbackDial(t *testing.T) {
 	_, err := r.discoverJWKSURL(context.Background(), srv.URL)
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(err.Error()).To(ContainSubstring("disallowed address"))
+}
+
+func TestBlockDiscoveryDialBlocksIPv4MappedIPv6(t *testing.T) {
+	err := blockDiscoveryDial("", "[::ffff:8.8.8.8]:443", nil)
+	if err == nil || !strings.Contains(err.Error(), "IPv4-mapped") {
+		t.Fatalf("blockDiscoveryDial() = %v, want IPv4-mapped address rejection", err)
+	}
 }
 
 func TestComputeConfigHashProperties(t *testing.T) {
@@ -410,9 +478,9 @@ func TestStampConfigHashSetsAnnotation(t *testing.T) {
 func TestMapSecretToConfig(t *testing.T) {
 	g := NewWithT(t)
 
-	r := &HyperFleetConfigReconciler{OperatorNamespace: "hyperfleet-system"}
+	r := &HyperFleetConfigReconciler{OperatorNamespace: operatorNamespace}
 
-	inNS := &metav1.PartialObjectMetadata{ObjectMeta: metav1.ObjectMeta{Name: "hyperfleet-db", Namespace: "hyperfleet-system"}}
+	inNS := &metav1.PartialObjectMetadata{ObjectMeta: metav1.ObjectMeta{Name: "hyperfleet-db", Namespace: operatorNamespace}}
 	reqs := r.mapSecretToConfig(context.Background(), inNS)
 	g.Expect(reqs).To(HaveLen(1))
 	g.Expect(reqs[0].Name).To(Equal(hyperfleetv1alpha1.SingletonName))

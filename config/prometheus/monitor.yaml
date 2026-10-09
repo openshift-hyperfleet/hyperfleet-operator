@@ -1,6 +1,7 @@
-# Prometheus Monitor Service (Metrics)
-# Scrapes the operator's plain-HTTP metrics endpoint on :9090, per the HyperFleet
-# metrics standard (same exposition as the API, Sentinel and Adapter components).
+# Prometheus Monitor Service (Metrics).
+# This is the plain-HTTP GitOps profile. It is intentionally separate from the
+# runtime bootstrapper; set --metrics-service-monitor-enabled=false when applying
+# this manifest so two field managers never own the same ServiceMonitor.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -9,16 +10,13 @@ metadata:
     app.kubernetes.io/name: hyperfleet-operator
     app.kubernetes.io/managed-by: kustomize
   name: controller-manager-metrics-monitor
-  namespace: system
+  namespace: hyperfleet-system
 spec:
   endpoints:
     - path: /metrics
       port: metrics # matches the metrics Service port name
-      # Hardcoded to the HyperFleet metrics standard's plain-HTTP default
-      # (--metrics-secure=false). If the operator is run with --metrics-secure=true,
-      # this scrape will fail: the endpoint requires HTTPS + authn/authz and this
-      # manifest is not updated automatically. Configure scheme/tlsConfig/bearerToken
-      # here yourself in that case (see config/prometheus/monitor_tls_patch.yaml).
+      # Matches the HyperFleet metrics standard default (--metrics-secure=false).
+      # Use config/secure-metrics for the complete secure profile instead.
       scheme: http
       interval: 30s
   selector:
