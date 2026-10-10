@@ -18,9 +18,18 @@ package e2e
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"math/big"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -52,6 +61,15 @@ const metricsServiceName = "hyperfleet-operator-controller-manager-metrics-servi
 // metricsPort is the plain-HTTP port the operator serves /metrics on, per the
 // HyperFleet metrics standard.
 const metricsPort = "9090"
+
+const (
+	metricsServerCertificateSecret = "metrics-server-cert"
+	metricsReaderBinding           = "hyperfleet-metrics-e2e-reader"
+	metricsReaderRole              = "hyperfleet-operator-metrics-reader"
+	metricsCertificateMountPath    = "/tmp/k8s-metrics-server/metrics-certs"
+	secureMetricsCurlCommand       = `curl --fail --show-error --silent --cacert /var/run/metrics/ca.crt ` +
+		`--header "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" %s`
+)
 
 const cleanupTimeout = 30 * time.Second
 
@@ -101,6 +119,11 @@ var _ = Describe("Manager", Ordered, func() {
 			"kubectl", "delete", "hyperfleetconfig", "cluster", "--ignore-not-found=true", "--wait=false")
 		runCleanup("cleaning up the curl pod for metrics",
 			"kubectl", "delete", "pod", "curl-metrics", "-n", namespace, "--ignore-not-found=true", "--wait=false")
+		runCleanup("cleaning up the metrics server certificate",
+			"kubectl", "delete", "secret", metricsServerCertificateSecret, "-n", namespace,
+			"--ignore-not-found=true", "--wait=false")
+		runCleanup("cleaning up the e2e metrics reader binding",
+			"kubectl", "delete", "clusterrolebinding", metricsReaderBinding, "--ignore-not-found=true", "--wait=false")
 		runCleanup("undeploying the controller-manager",
 			"make", "undeploy", "ignore-not-found=true")
 		runCleanup("uninstalling CRDs",
@@ -268,6 +291,120 @@ var _ = Describe("Manager", Ordered, func() {
 			))
 		})
 
+		It("should serve metrics over verified TLS with bearer authentication", func() {
+			// The secure profile needs a stable serving certificate. Generate a
+			// short-lived test CA and a service-DNS certificate here rather than
+			// relying on cert-manager being installed in the e2e environment.
+			caPEM, certPEM, keyPEM, err := generateMetricsServingCertificate([]string{
+				fmt.Sprintf("%s.%s.svc", metricsServiceName, namespace),
+				fmt.Sprintf("%s.%s.svc.cluster.local", metricsServiceName, namespace),
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			certDir := GinkgoT().TempDir()
+			caPath := filepath.Join(certDir, "ca.crt")
+			certPath := filepath.Join(certDir, "tls.crt")
+			keyPath := filepath.Join(certDir, "tls.key")
+			Expect(os.WriteFile(caPath, caPEM, 0o600)).To(Succeed())
+			Expect(os.WriteFile(certPath, certPEM, 0o600)).To(Succeed())
+			Expect(os.WriteFile(keyPath, keyPEM, 0o600)).To(Succeed())
+
+			By("creating the metrics serving-certificate Secret")
+			cmd := exec.Command("kubectl", "create", "secret", "generic", metricsServerCertificateSecret,
+				"--namespace", namespace,
+				"--from-file=ca.crt="+caPath,
+				"--from-file=tls.crt="+certPath,
+				"--from-file=tls.key="+keyPath,
+			)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("granting the scrape ServiceAccount access to the protected metrics URL")
+			cmd = exec.Command("kubectl", "create", "clusterrolebinding", metricsReaderBinding,
+				"--clusterrole="+metricsReaderRole,
+				"--serviceaccount="+namespace+":"+serviceAccountName,
+			)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("reconfiguring the manager with secure metrics and the mounted serving certificate")
+			securePatch := fmt.Sprintf(`[
+				{"op":"replace","path":"/spec/template/spec/containers/0/args/3","value":"--metrics-secure=true"},
+				{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--metrics-service-monitor-enabled=false"},
+				{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--metrics-cert-path=%s"},
+				{"op":"add","path":"/spec/template/spec/containers/0/volumeMounts/-",
+				 "value":{"name":"metrics-certs","mountPath":"%s","readOnly":true}},
+				{"op":"add","path":"/spec/template/spec/volumes/-",
+				 "value":{"name":"metrics-certs","secret":{"secretName":"%s","optional":false,
+				 "items":[{"key":"ca.crt","path":"ca.crt"},{"key":"tls.crt","path":"tls.crt"},
+				 {"key":"tls.key","path":"tls.key"}]}}}
+			]`, metricsCertificateMountPath, metricsCertificateMountPath, metricsServerCertificateSecret)
+			cmd = exec.Command("kubectl", "patch", "deployment", "hyperfleet-operator-controller-manager",
+				"--namespace", namespace, "--type=json", "--patch", securePatch)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			cmd = exec.Command("kubectl", "rollout", "status", "deployment/hyperfleet-operator-controller-manager",
+				"--namespace", namespace, "--timeout=2m")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("waiting for the replacement manager Pod")
+			Eventually(func(g Gomega) {
+				cmd = exec.Command("kubectl", "get", "pods", "-l", "control-plane=controller-manager",
+					"-o", "jsonpath={.items[0].metadata.name}", "--namespace", namespace)
+				output, getErr := utils.Run(cmd)
+				g.Expect(getErr).NotTo(HaveOccurred())
+				g.Expect(strings.TrimSpace(output)).NotTo(BeEmpty())
+				controllerPodName = strings.TrimSpace(output)
+			}).Should(Succeed())
+
+			By("scraping through the Service with the CA and a ServiceAccount bearer token")
+			cmd = exec.Command("kubectl", "delete", "pod", "curl-metrics", "--namespace", namespace,
+				"--ignore-not-found=true", "--wait=true")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			secureMetricsURL := fmt.Sprintf("https://%s.%s.svc.cluster.local:%s/metrics",
+				metricsServiceName, namespace, metricsPort)
+			cmd = exec.Command("kubectl", "run", "curl-metrics", "--restart=Never", "--namespace", namespace,
+				"--image=curlimages/curl:latest", "--overrides", fmt.Sprintf(`{
+					"spec": {
+						"serviceAccount": %q,
+						"containers": [{
+							"name": "curl",
+							"image": "curlimages/curl:latest",
+							"command": ["/bin/sh", "-c"],
+							"args": [%q],
+							"volumeMounts": [{"name": "metrics-ca", "mountPath": "/var/run/metrics", "readOnly": true}],
+							"securityContext": {
+								"allowPrivilegeEscalation": false,
+								"capabilities": {"drop": ["ALL"]},
+								"runAsNonRoot": true,
+								"runAsUser": 1000,
+								"seccompProfile": {"type": "RuntimeDefault"}
+							}
+						}],
+						"volumes": [{"name": "metrics-ca", "secret": {"secretName": %q, "items": [{"key": "ca.crt", "path": "ca.crt"}]}}]
+					}
+				}`, serviceAccountName,
+					fmt.Sprintf(secureMetricsCurlCommand, secureMetricsURL), metricsServerCertificateSecret))
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(func(g Gomega) {
+				cmd = exec.Command("kubectl", "get", "pod", "curl-metrics", "--namespace", namespace,
+					"-o", "jsonpath={.status.phase}")
+				output, getErr := utils.Run(cmd)
+				g.Expect(getErr).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("Succeeded"))
+			}, 5*time.Minute).Should(Succeed())
+
+			metricsOutput, err := utils.Run(exec.Command("kubectl", "logs", "curl-metrics", "--namespace", namespace))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(metricsOutput).To(ContainSubstring("hyperfleet_operator_up"))
+		})
+
 		It("should scope operand authorization to the operator namespace", func() {
 			By("verifying the manager can manage operands in its own namespace")
 			operandResources := []string{
@@ -387,6 +524,53 @@ var _ = Describe("Manager", Ordered, func() {
 		// ))
 	})
 })
+
+func generateMetricsServingCertificate(dnsNames []string) (caPEM, certPEM, keyPEM []byte, err error) {
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("generate CA key: %w", err)
+	}
+	now := time.Now()
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "hyperfleet-e2e-metrics-ca"},
+		NotBefore:             now.Add(-time.Minute),
+		NotAfter:              now.Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("create CA certificate: %w", err)
+	}
+
+	serverKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("generate server key: %w", err)
+	}
+	serverTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: dnsNames[0]},
+		DNSNames:     dnsNames,
+		NotBefore:    now.Add(-time.Minute),
+		NotAfter:     now.Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	serverDER, err := x509.CreateCertificate(rand.Reader, serverTemplate, caTemplate, &serverKey.PublicKey, caKey)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("create server certificate: %w", err)
+	}
+	serverKeyDER, err := x509.MarshalECPrivateKey(serverKey)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("marshal server key: %w", err)
+	}
+
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}),
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverDER}),
+		pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: serverKeyDER}), nil
+}
 
 const (
 	managerSubject                 = "system:serviceaccount:" + namespace + ":" + serviceAccountName

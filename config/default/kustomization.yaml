@@ -28,7 +28,9 @@ resources:
 #- ../webhook
 # [CERTMANAGER] To enable cert-manager, uncomment all sections with 'CERTMANAGER'. 'WEBHOOK' components are required.
 #- ../certmanager
-# [PROMETHEUS] To enable prometheus monitor, uncomment all sections with 'PROMETHEUS'.
+# [PROMETHEUS] To apply the optional GitOps ServiceMonitor, uncomment this resource
+# and set --metrics-service-monitor-enabled=false on the manager so it does not
+# compete with the runtime bootstrapper for the same object.
 #- ../prometheus
 # [METRICS] Expose the controller manager metrics service.
 - metrics_service.yaml

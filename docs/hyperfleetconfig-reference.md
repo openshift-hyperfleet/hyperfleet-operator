@@ -106,6 +106,17 @@ Authentication defaults to enabled. When it is enabled:
 - Omitting `jwkCertSecretRef` makes the operator fetch
   `{issuer}/.well-known/openid-configuration` and pass the returned `jwks_uri`
   to the API component.
+- Discovery connections are limited to public destinations. The operator rejects
+  loopback, private, link-local, multicast, unspecified, CGNAT, and special-
+  purpose addresses that IANA does not mark **Globally Reachable: True**. The
+  checked-in table is a complete static snapshot of the
+  [IANA IPv4](https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml)
+  and [IANA IPv6](https://www.iana.org/assignments/iana-ipv6-special-registry/iana-ipv6-special-registry.xhtml)
+  registries, updated 2025-10-09. Records with `False`, `N/A`, or retired
+  reachability are denied; IANA's explicitly globally reachable, more-specific
+  exceptions remain allowed by longest-prefix match. This check is applied to
+  the resolved dial address, so DNS rebinding cannot bypass it. Use
+  `jwkCertSecretRef` for a private or air-gapped issuer.
 - A discovery failure that has no usable cached value degrades reconciliation.
 
 When `enabled` is explicitly false, issuer and audience are not required and

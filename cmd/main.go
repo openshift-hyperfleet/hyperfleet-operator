@@ -69,6 +69,10 @@ func main() {
 	var enableLeaderElection bool
 	var probeAddr string
 	var secureMetrics bool
+	var serviceMonitorEnabled bool
+	var metricsServiceMonitorCASecretName, metricsServiceMonitorCASecretKey string
+	var metricsServiceMonitorServerName string
+	var metricsServiceMonitorAuthorizationSecretName, metricsServiceMonitorAuthorizationSecretKey string
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
 	// Defaults follow the HyperFleet health-endpoints / metrics standards, matching
@@ -83,6 +87,19 @@ func main() {
 	flag.BoolVar(&secureMetrics, "metrics-secure", false,
 		"If set, the metrics endpoint is served securely via HTTPS with authn/authz. "+
 			"The HyperFleet standard scrapes plain HTTP, so this defaults to false.")
+	flag.BoolVar(&serviceMonitorEnabled, "metrics-service-monitor-enabled", true,
+		"Create and maintain the operator ServiceMonitor when the Prometheus Operator API is available. "+
+			"Disable when a GitOps-managed ServiceMonitor owns that object instead.")
+	flag.StringVar(&metricsServiceMonitorCASecretName, "metrics-service-monitor-ca-secret-name", "",
+		"Name of the Secret containing the CA used to verify secure metrics scraping.")
+	flag.StringVar(&metricsServiceMonitorCASecretKey, "metrics-service-monitor-ca-secret-key", "",
+		"Key in --metrics-service-monitor-ca-secret-name containing the CA certificate.")
+	flag.StringVar(&metricsServiceMonitorServerName, "metrics-service-monitor-server-name", "",
+		"Expected TLS server name for secure metrics scraping.")
+	flag.StringVar(&metricsServiceMonitorAuthorizationSecretName, "metrics-service-monitor-authorization-secret-name", "",
+		"Name of the Secret containing a bearer credential authorized to scrape secure metrics.")
+	flag.StringVar(&metricsServiceMonitorAuthorizationSecretKey, "metrics-service-monitor-authorization-secret-key", "",
+		"Key in --metrics-service-monitor-authorization-secret-name containing the bearer credential.")
 	flag.StringVar(&webhookCertPath, "webhook-cert-path", "", "The directory that contains the webhook certificate.")
 	flag.StringVar(&webhookCertName, "webhook-cert-name", "tls.crt", "The name of the webhook certificate file.")
 	flag.StringVar(&webhookCertKey, "webhook-cert-key", "tls.key", "The name of the webhook key file.")
@@ -274,16 +291,28 @@ func main() {
 	// metricsserver.NewServer): the ServiceMonitor always points at the metrics
 	// Service's "metrics" port, so with no metrics server listening it would only
 	// give Prometheus a target that fails every scrape.
-	if metricsAddr != "0" {
+	if metricsAddr != "0" && serviceMonitorEnabled {
+		scrapeConfig := servicemonitor.ScrapeConfig{
+			Secure:                       secureMetrics,
+			ServingCertificateConfigured: metricsCertPath != "",
+			TLSCASecretName:              metricsServiceMonitorCASecretName,
+			TLSCASecretKey:               metricsServiceMonitorCASecretKey,
+			ServerName:                   metricsServiceMonitorServerName,
+			AuthorizationSecretName:      metricsServiceMonitorAuthorizationSecretName,
+			AuthorizationSecretKey:       metricsServiceMonitorAuthorizationSecretKey,
+		}
 		if err := mgr.Add(&servicemonitor.Bootstrapper{
-			Config:    mgr.GetConfig(),
-			Namespace: operatorNamespace,
+			Config:       mgr.GetConfig(),
+			Namespace:    operatorNamespace,
+			ScrapeConfig: scrapeConfig,
 		}); err != nil {
 			setupLog.Error(err, "unable to add ServiceMonitor bootstrapper")
 			os.Exit(1)
 		}
-	} else {
+	} else if metricsAddr == "0" {
 		setupLog.Info("metrics disabled (metrics-bind-address=0); skipping ServiceMonitor bootstrap")
+	} else {
+		setupLog.Info("ServiceMonitor bootstrap disabled; an external GitOps configuration owns metrics scraping")
 	}
 
 	if metricsCertWatcher != nil {
