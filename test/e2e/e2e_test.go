@@ -73,9 +73,40 @@ const (
 	activeManagerPodsTemplate      = `go-template={{ range .items }}` +
 		`{{ if not .metadata.deletionTimestamp }}` +
 		`{{ .metadata.name }}{{ "\n" }}{{ end }}{{ end }}`
-	secureMetricsCurlCommand = `curl --fail --show-error --silent --connect-timeout 5 --max-time 20 ` +
-		`--retry 3 --retry-delay 2 --retry-all-errors --cacert /var/run/metrics/ca.crt ` +
-		`--header "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" %s`
+	secureMetricsCurlCommand = `set -eu
+url=%q
+token=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+curl --fail --show-error --silent --connect-timeout 5 --max-time 20 \
+  --retry 3 --retry-delay 2 --retry-all-errors --cacert /var/run/metrics/ca.crt \
+  --header "Authorization: Bearer $token" "$url"
+status=$(curl --silent --show-error --connect-timeout 5 --max-time 20 \
+  --retry 3 --retry-delay 2 --output /dev/null --write-out '%%{http_code}' \
+  --cacert /var/run/metrics/ca.crt "$url")
+if [ "$status" != "401" ]; then
+  echo "expected unauthenticated metrics request to return HTTP 401, got $status" >&2
+  exit 1
+fi
+echo "unauthenticated metrics request rejected (HTTP 401)"
+# Tamper with the signed token to check that merely presenting a bearer token is insufficient.
+invalid_status=$(curl --silent --show-error --connect-timeout 5 --max-time 20 \
+  --retry 3 --retry-delay 2 --output /dev/null --write-out '%%{http_code}' \
+  --cacert /var/run/metrics/ca.crt \
+  --header "Authorization: Bearer ${token}invalid" "$url")
+case "$invalid_status" in
+  4[0-9][0-9]|5[0-9][0-9]) ;;
+  *) echo "expected invalid bearer token to be rejected, got HTTP $invalid_status" >&2; exit 1 ;;
+esac
+echo "invalid bearer token rejected (HTTP $invalid_status)"
+untrusted_exit=0
+curl --silent --connect-timeout 5 --max-time 20 --retry 3 --retry-delay 2 \
+  --output /dev/null \
+  --cacert /var/run/metrics/untrusted-ca.crt \
+  --header "Authorization: Bearer $token" "$url" || untrusted_exit=$?
+if [ "$untrusted_exit" -ne 60 ]; then
+  echo "expected untrusted metrics CA to fail TLS verification (curl exit 60), got $untrusted_exit" >&2
+  exit 1
+fi
+echo "untrusted metrics CA rejected (curl exit 60)"`
 )
 
 const cleanupTimeout = 30 * time.Second
@@ -309,17 +340,22 @@ var _ = Describe("Manager", Ordered, func() {
 			// The secure profile needs a stable serving certificate. Generate a
 			// short-lived test CA and a service-DNS certificate here rather than
 			// relying on cert-manager being installed in the e2e environment.
-			caPEM, certPEM, keyPEM, err := generateMetricsServingCertificate([]string{
+			dnsNames := []string{
 				fmt.Sprintf("%s.%s.svc", metricsServiceName, namespace),
 				fmt.Sprintf("%s.%s.svc.cluster.local", metricsServiceName, namespace),
-			})
+			}
+			caPEM, certPEM, keyPEM, err := generateMetricsServingCertificate(dnsNames, "hyperfleet-e2e-metrics-ca")
+			Expect(err).NotTo(HaveOccurred())
+			untrustedCAPEM, _, _, err := generateMetricsServingCertificate(dnsNames, "hyperfleet-e2e-untrusted-ca")
 			Expect(err).NotTo(HaveOccurred())
 
 			certDir := GinkgoT().TempDir()
 			caPath := filepath.Join(certDir, "ca.crt")
+			untrustedCAPath := filepath.Join(certDir, "untrusted-ca.crt")
 			certPath := filepath.Join(certDir, "tls.crt")
 			keyPath := filepath.Join(certDir, "tls.key")
 			Expect(os.WriteFile(caPath, caPEM, 0o600)).To(Succeed())
+			Expect(os.WriteFile(untrustedCAPath, untrustedCAPEM, 0o600)).To(Succeed())
 			Expect(os.WriteFile(certPath, certPEM, 0o600)).To(Succeed())
 			Expect(os.WriteFile(keyPath, keyPEM, 0o600)).To(Succeed())
 
@@ -327,6 +363,7 @@ var _ = Describe("Manager", Ordered, func() {
 			cmd := exec.Command("kubectl", "create", "secret", "generic", metricsServerCertificateSecret,
 				"--namespace", namespace,
 				"--from-file=ca.crt="+caPath,
+				"--from-file=untrusted-ca.crt="+untrustedCAPath,
 				"--from-file=tls.crt="+certPath,
 				"--from-file=tls.key="+keyPath,
 			)
@@ -374,7 +411,7 @@ var _ = Describe("Manager", Ordered, func() {
 				controllerPodName = podNames[0]
 			}).Should(Succeed())
 
-			By("scraping through the Service with the CA and a ServiceAccount bearer token")
+			By("verifying secure scrape, token rejection, and CA validation")
 			secureMetricsURL := fmt.Sprintf("https://%s.%s.svc.cluster.local:%s/metrics",
 				metricsServiceName, namespace, metricsPort)
 			cmd = exec.Command("kubectl", "run", secureMetricsCurlPod, "--restart=Never", "--namespace", namespace,
@@ -395,7 +432,16 @@ var _ = Describe("Manager", Ordered, func() {
 								"seccompProfile": {"type": "RuntimeDefault"}
 							}
 						}],
-						"volumes": [{"name": "metrics-ca", "secret": {"secretName": %q, "items": [{"key": "ca.crt", "path": "ca.crt"}]}}]
+						"volumes": [{
+							"name": "metrics-ca",
+							"secret": {
+								"secretName": %q,
+								"items": [
+									{"key": "ca.crt", "path": "ca.crt"},
+									{"key": "untrusted-ca.crt", "path": "untrusted-ca.crt"}
+								]
+							}
+						}]
 					}
 				}`, serviceAccountName, metricsCurlImage,
 					fmt.Sprintf(secureMetricsCurlCommand, secureMetricsURL), metricsServerCertificateSecret))
@@ -416,6 +462,9 @@ var _ = Describe("Manager", Ordered, func() {
 			metricsOutput, err := utils.Run(exec.Command("kubectl", "logs", secureMetricsCurlPod, "--namespace", namespace))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(metricsOutput).To(ContainSubstring("hyperfleet_operator_up"))
+			Expect(metricsOutput).To(ContainSubstring("unauthenticated metrics request rejected (HTTP 401)"))
+			Expect(metricsOutput).To(ContainSubstring("invalid bearer token rejected (HTTP "))
+			Expect(metricsOutput).To(ContainSubstring("untrusted metrics CA rejected (curl exit 60)"))
 
 			// The remaining specs in this Ordered suite must see the original
 			// manager Deployment. On a failure, AfterAll tears down the entire
@@ -569,7 +618,9 @@ var _ = Describe("Manager", Ordered, func() {
 	})
 })
 
-func generateMetricsServingCertificate(dnsNames []string) (caPEM, certPEM, keyPEM []byte, err error) {
+func generateMetricsServingCertificate(
+	dnsNames []string, caCommonName string,
+) (caPEM, certPEM, keyPEM []byte, err error) {
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("generate CA key: %w", err)
@@ -577,7 +628,7 @@ func generateMetricsServingCertificate(dnsNames []string) (caPEM, certPEM, keyPE
 	now := time.Now()
 	caTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "hyperfleet-e2e-metrics-ca"},
+		Subject:               pkix.Name{CommonName: caCommonName},
 		NotBefore:             now.Add(-time.Minute),
 		NotAfter:              now.Add(time.Hour),
 		IsCA:                  true,
