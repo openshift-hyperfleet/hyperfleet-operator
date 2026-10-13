@@ -318,9 +318,11 @@ The credential subject must be authorized to `get` the non-resource URL
 The Prometheus Operator must also be allowed to read the referenced Secrets.
 The operator neither creates nor copies scrape credentials, and does not use
 `bearerTokenFile`; cluster owners are responsible for secure credential delivery
-and rotation. On a cluster without the optional ServiceMonitor API, secure
-metrics still starts normally: validation of ServiceMonitor-only CA and bearer
-settings happens only after the API is discovered.
+and rotation. When runtime ServiceMonitor creation is enabled, the operator
+validates these secure scrape flags at startup on every replica, even if the
+optional ServiceMonitor API is absent. To serve secure metrics without a runtime
+ServiceMonitor, set `--metrics-service-monitor-enabled=false` and manage scraping
+separately.
 
 For GitOps, use the checked-in `config/secure-metrics` Kustomize overlay, rather
 than applying the plain-HTTP `config/prometheus` base. It configures the manager

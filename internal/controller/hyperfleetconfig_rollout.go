@@ -197,6 +197,12 @@ var specialPurposeDiscoveryRanges = []specialPurposeDiscoveryRange{
 	specialPurposeRange("fe80::/10", false),
 }
 
+// wellKnownNAT64Prefix embeds an IPv4 destination in the final 32 bits. Its
+// IANA globally-reachable designation does not make every embedded IPv4
+// address safe for discovery: a translator could still reach metadata,
+// loopback, or private IPv4 destinations through this prefix.
+var wellKnownNAT64Prefix = mustCIDR("64:ff9b::/96")
+
 // mustCIDR parses a CIDR literal that is a compile-time constant; a parse error
 // can only be a programming error, so it panics rather than returning one.
 func mustCIDR(s string) *net.IPNet {
@@ -250,6 +256,11 @@ func specialPurposeGloballyReachable(ip net.IP) (globallyReachable, found bool) 
 // IsPrivate alone is insufficient: it does not cover CGNAT (100.64.0.0/10),
 // documentation space, and several protocol allocations.
 func isDisallowedDiscoveryTarget(ip net.IP) bool {
+	if ipv6 := ip.To16(); ip.To4() == nil && wellKnownNAT64Prefix.Contains(ipv6) {
+		// Check the translated destination against the same IPv4 policy before
+		// the IANA exception for 64:ff9b::/96 can allow the IPv6 address.
+		return isDisallowedDiscoveryTarget(ipv6[net.IPv6len-net.IPv4len:])
+	}
 	// IANA's more-specific globally reachable records take precedence over the
 	// standard-library category helpers. For example, current Go releases
 	// classify 192.0.0.9 as private because it sits in the broader IETF protocol

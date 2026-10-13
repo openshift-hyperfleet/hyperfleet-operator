@@ -301,6 +301,10 @@ func main() {
 			AuthorizationSecretName:      metricsServiceMonitorAuthorizationSecretName,
 			AuthorizationSecretKey:       metricsServiceMonitorAuthorizationSecretKey,
 		}
+		if err := scrapeConfig.Validate(); err != nil {
+			setupLog.Error(err, "invalid ServiceMonitor scrape configuration")
+			os.Exit(1)
+		}
 		if err := mgr.Add(&servicemonitor.Bootstrapper{
 			Config:       mgr.GetConfig(),
 			Namespace:    operatorNamespace,

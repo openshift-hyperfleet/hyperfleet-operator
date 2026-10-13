@@ -18,7 +18,6 @@ package servicemonitor
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -204,40 +203,26 @@ func TestScrapeConfigValidate(t *testing.T) {
 	}
 }
 
-func TestBootstrapperSecureConfigurationValidationFollowsAPIDiscovery(t *testing.T) {
-	incompleteSecureConfig := ScrapeConfig{
-		Secure:                  true,
-		TLSCASecretName:         "metrics-ca",
-		TLSCASecretKey:          testTLSCASecretKey,
-		ServerName:              testServerName,
-		AuthorizationSecretName: "metrics-scrape-credentials",
-		AuthorizationSecretKey:  testAuthorizationSecretKey,
+func TestBootstrapperSkipsUnavailableAPI(t *testing.T) {
+	secureConfig := ScrapeConfig{
+		Secure:                       true,
+		ServingCertificateConfigured: true,
+		TLSCASecretName:              "metrics-ca",
+		TLSCASecretKey:               testTLSCASecretKey,
+		ServerName:                   testServerName,
+		AuthorizationSecretName:      "metrics-scrape-credentials",
+		AuthorizationSecretKey:       testAuthorizationSecretKey,
 	}
 
-	t.Run("skips an unavailable optional API before validating secure configuration", func(t *testing.T) {
-		b := &Bootstrapper{
-			ScrapeConfig: incompleteSecureConfig,
-			serviceMonitorAvailability: func(*rest.Config) (bool, error) {
-				return false, nil
-			},
-		}
-		if err := b.Start(context.Background()); err != nil {
-			t.Fatalf("Start() = %v, want nil when the ServiceMonitor API is absent", err)
-		}
-	})
-
-	t.Run("fails rather than creating an untrusted secure monitor when the API is available", func(t *testing.T) {
-		b := &Bootstrapper{
-			ScrapeConfig: incompleteSecureConfig,
-			serviceMonitorAvailability: func(*rest.Config) (bool, error) {
-				return true, nil
-			},
-		}
-		err := b.Start(context.Background())
-		if err == nil || !strings.Contains(err.Error(), "--metrics-cert-path") {
-			t.Fatalf("Start() = %v, want a serving-certificate validation error", err)
-		}
-	})
+	b := &Bootstrapper{
+		ScrapeConfig: secureConfig,
+		serviceMonitorAvailability: func(*rest.Config) (bool, error) {
+			return false, nil
+		},
+	}
+	if err := b.Start(context.Background()); err != nil {
+		t.Fatalf("Start() = %v, want nil when the ServiceMonitor API is absent", err)
+	}
 }
 
 // TestHasServiceMonitorKind verifies hasServiceMonitorKind detects the

@@ -314,7 +314,13 @@ func TestIsDisallowedDiscoveryTarget(t *testing.T) {
 		{"IPv4 AS112 exception", "192.31.196.1", false},
 		{"IPv4 AMT exception", "192.52.193.1", false},
 		{"IPv4 direct-delegation AS112 exception", "192.175.48.1", false},
-		{"IPv6 translation exception", "64:ff9b::1", false},
+		{"IPv6 translation of public IPv4", "64:ff9b::808:808", false},
+		// NAT64 translates the embedded IPv4 address, so the public IPv6
+		// prefix must not bypass the IPv4 destination policy.
+		{"IPv6 translation of this-network IPv4", "64:ff9b::1", true},
+		{"IPv6 translation of metadata IPv4", "64:ff9b::a9fe:a9fe", true},
+		{"IPv6 translation of loopback IPv4", "64:ff9b::7f00:1", true},
+		{"IPv6 translation of private IPv4", "64:ff9b::a00:5", true},
 		{"IPv6 PCP anycast exception", "2001:1::1", false},
 		{"IPv6 TURN anycast exception", "2001:1::2", false},
 		{"IPv6 DNS-SD anycast exception", "2001:1::3", false},

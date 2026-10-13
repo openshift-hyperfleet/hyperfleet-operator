@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2" // nolint:revive,staticcheck
@@ -165,11 +166,32 @@ func IsCertManagerCRDsInstalled() bool {
 	return false
 }
 
-// LoadImageToKindClusterWithName loads a local docker image to the kind cluster
+// LoadImageToKindClusterWithName loads a local container image to the kind cluster.
+// Kind's docker-image loader cannot see images in the Podman machine on macOS,
+// so the Podman provider uses an image archive instead.
 func LoadImageToKindClusterWithName(name string) error {
 	cluster := "kind"
 	if v, ok := os.LookupEnv("KIND_CLUSTER"); ok {
 		cluster = v
+	}
+	if os.Getenv("KIND_EXPERIMENTAL_PROVIDER") == "podman" {
+		archiveDir, err := os.MkdirTemp("", "hyperfleet-kind-image-*")
+		if err != nil {
+			return fmt.Errorf("create temporary image archive directory: %w", err)
+		}
+		defer func() {
+			if err := os.RemoveAll(archiveDir); err != nil {
+				warnError(fmt.Errorf("remove temporary image archive directory: %w", err))
+			}
+		}()
+		archivePath := filepath.Join(archiveDir, "operator.tar")
+		if _, err := Run(exec.Command("podman", "save", "--format", "docker-archive", "-o", archivePath, name)); err != nil {
+			return fmt.Errorf("save Podman image %q: %w", name, err)
+		}
+		if _, err := Run(exec.Command("kind", "load", "image-archive", archivePath, "--name", cluster)); err != nil {
+			return fmt.Errorf("load Podman image archive into Kind: %w", err)
+		}
+		return nil
 	}
 	kindOptions := []string{"load", "docker-image", name, "--name", cluster}
 	cmd := exec.Command("kind", kindOptions...)

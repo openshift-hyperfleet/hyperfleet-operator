@@ -114,8 +114,10 @@ Authentication defaults to enabled. When it is enabled:
   and [IANA IPv6](https://www.iana.org/assignments/iana-ipv6-special-registry/iana-ipv6-special-registry.xhtml)
   registries, updated 2025-10-09. Records with `False`, `N/A`, or retired
   reachability are denied; IANA's explicitly globally reachable, more-specific
-  exceptions remain allowed by longest-prefix match. This check is applied to
-  the resolved dial address, so DNS rebinding cannot bypass it. Use
+  exceptions remain allowed by longest-prefix match. For the globally reachable
+  `64:ff9b::/96` NAT64 prefix, the embedded IPv4 destination must also pass the
+  IPv4 policy, so translation cannot reach a blocked IPv4 address. This check is
+  applied to the resolved dial address, so DNS rebinding cannot bypass it. Use
   `jwkCertSecretRef` for a private or air-gapped issuer.
 - A discovery failure that has no usable cached value degrades reconciliation.
 

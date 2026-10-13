@@ -66,7 +66,8 @@ spec:
           # health/readiness on :8080, matching the other components.
           - --health-probe-bind-address=:8080
           - --metrics-bind-address=:9090
-          - --metrics-secure=false
+          # Secure serving defaults to false in cmd/main.go. The secure-metrics
+          # overlay appends --metrics-secure=true without relying on arg order.
         image: controller:latest
         name: manager
         env:

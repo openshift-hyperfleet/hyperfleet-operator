@@ -144,14 +144,12 @@ func (c ScrapeConfig) Validate() error {
 func (b *Bootstrapper) NeedLeaderElection() bool { return true }
 
 // Start ensures the ServiceMonitor exists when the Prometheus Operator API is
-// available. Discovery and API-operation failures are best-effort: they are
-// logged and swallowed so metrics bootstrap never crashes the manager or blocks
-// reconciliation. An invalid secure scrape configuration is returned only after
-// confirming that the ServiceMonitor API is installed: it must not silently
-// publish an unusable or untrusted secure monitor, while a generic Kubernetes
-// cluster without that optional API must still be able to serve secure metrics.
-// A cluster that installs the Prometheus Operator after the operator started
-// picks the ServiceMonitor up on the operator's next restart.
+// available. The caller validates ScrapeConfig before adding this runnable to
+// the manager, so every replica rejects invalid secure configuration at startup.
+// Discovery and API-operation failures are best-effort: they are logged and
+// swallowed so metrics bootstrap never crashes the manager or blocks
+// reconciliation. A cluster that installs the Prometheus Operator after the
+// operator started picks the ServiceMonitor up on the operator's next restart.
 func (b *Bootstrapper) Start(ctx context.Context) error {
 	log := logf.FromContext(ctx).WithName("servicemonitor")
 	availability := b.serviceMonitorAvailability
@@ -171,10 +169,6 @@ func (b *Bootstrapper) Start(ctx context.Context) error {
 			"scraping, or apply config/prometheus manually.")
 		return nil
 	}
-	if err := b.ScrapeConfig.Validate(); err != nil {
-		return fmt.Errorf("validate ServiceMonitor scrape configuration: %w", err)
-	}
-
 	cl, err := client.New(b.Config, client.Options{})
 	if err != nil {
 		log.Error(err, "could not build client for ServiceMonitor bootstrap")

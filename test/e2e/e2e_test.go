@@ -67,7 +67,14 @@ const (
 	metricsReaderBinding           = "hyperfleet-metrics-e2e-reader"
 	metricsReaderRole              = "hyperfleet-operator-metrics-reader"
 	metricsCertificateMountPath    = "/tmp/k8s-metrics-server/metrics-certs"
-	secureMetricsCurlCommand       = `curl --fail --show-error --silent --cacert /var/run/metrics/ca.crt ` +
+	plainMetricsCurlPod            = "curl-metrics"
+	secureMetricsCurlPod           = "curl-secure-metrics"
+	metricsCurlImage               = "curlimages/curl:8.16.0"
+	activeManagerPodsTemplate      = `go-template={{ range .items }}` +
+		`{{ if not .metadata.deletionTimestamp }}` +
+		`{{ .metadata.name }}{{ "\n" }}{{ end }}{{ end }}`
+	secureMetricsCurlCommand = `curl --fail --show-error --silent --connect-timeout 5 --max-time 20 ` +
+		`--retry 3 --retry-delay 2 --retry-all-errors --cacert /var/run/metrics/ca.crt ` +
 		`--header "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" %s`
 )
 
@@ -97,7 +104,8 @@ var _ = Describe("Manager", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
 
 		By("deploying the controller-manager")
-		cmd = exec.Command("make", "deploy", fmt.Sprintf("OPERATOR_IMG=%s", projectImage))
+		cmd = exec.Command("make", "deploy", fmt.Sprintf("OPERATOR_IMG=%s", projectImage),
+			fmt.Sprintf("RELATED_IMAGE_HYPERFLEET_OPERATOR=%s", projectImage))
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
 	})
@@ -118,7 +126,9 @@ var _ = Describe("Manager", Ordered, func() {
 		runCleanup("cleaning up the HyperFleetConfig singleton",
 			"kubectl", "delete", "hyperfleetconfig", "cluster", "--ignore-not-found=true", "--wait=false")
 		runCleanup("cleaning up the curl pod for metrics",
-			"kubectl", "delete", "pod", "curl-metrics", "-n", namespace, "--ignore-not-found=true", "--wait=false")
+			"kubectl", "delete", "pod", plainMetricsCurlPod, "-n", namespace, "--ignore-not-found=true", "--wait=false")
+		runCleanup("cleaning up the secure curl pod for metrics",
+			"kubectl", "delete", "pod", secureMetricsCurlPod, "-n", namespace, "--ignore-not-found=true", "--wait=false")
 		runCleanup("cleaning up the metrics server certificate",
 			"kubectl", "delete", "secret", metricsServerCertificateSecret, "-n", namespace,
 			"--ignore-not-found=true", "--wait=false")
@@ -157,13 +167,20 @@ var _ = Describe("Manager", Ordered, func() {
 				_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get Kubernetes events: %s", err)
 			}
 
-			By("Fetching curl-metrics logs")
-			cmd = exec.Command("kubectl", "logs", "curl-metrics", "-n", namespace)
-			metricsOutput, err := utils.Run(cmd)
-			if err == nil {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Metrics logs:\n %s", metricsOutput)
-			} else {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get curl-metrics logs: %s", err)
+			for _, podName := range []string{plainMetricsCurlPod, secureMetricsCurlPod} {
+				// A failing spec may not have created its curl pod yet. Only ask for
+				// logs when it exists, so diagnostics retain the original failure.
+				pod, getErr := utils.Run(exec.Command("kubectl", "get", "pod", podName,
+					"-n", namespace, "--ignore-not-found=true", "-o", "name"))
+				if getErr != nil || strings.TrimSpace(pod) == "" {
+					continue
+				}
+				metricsOutput, logsErr := utils.Run(exec.Command("kubectl", "logs", podName, "-n", namespace))
+				if logsErr == nil {
+					_, _ = fmt.Fprintf(GinkgoWriter, "%s logs:\n%s", podName, metricsOutput)
+				} else {
+					_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get %s logs: %s", podName, logsErr)
+				}
 			}
 
 			By("Fetching controller manager pod description")
@@ -187,10 +204,7 @@ var _ = Describe("Manager", Ordered, func() {
 				// Get the name of the controller-manager pod
 				cmd := exec.Command("kubectl", "get",
 					"pods", "-l", "control-plane=controller-manager",
-					"-o", "go-template={{ range .items }}"+
-						"{{ if not .metadata.deletionTimestamp }}"+
-						"{{ .metadata.name }}"+
-						"{{ \"\\n\" }}{{ end }}{{ end }}",
+					"-o", activeManagerPodsTemplate,
 					"-n", namespace,
 				)
 
@@ -239,15 +253,15 @@ var _ = Describe("Manager", Ordered, func() {
 			Eventually(verifyMetricsServerStarted).Should(Succeed())
 
 			By("creating the curl-metrics pod to access the plain-HTTP metrics endpoint")
-			cmd = exec.Command("kubectl", "run", "curl-metrics", "--restart=Never",
+			cmd = exec.Command("kubectl", "run", plainMetricsCurlPod, "--restart=Never",
 				"--namespace", namespace,
-				"--image=curlimages/curl:latest",
+				"--image="+metricsCurlImage,
 				"--overrides",
 				fmt.Sprintf(`{
 					"spec": {
 						"containers": [{
 							"name": "curl",
-							"image": "curlimages/curl:latest",
+							"image": %q,
 							"command": ["/bin/sh", "-c"],
 							"args": ["curl -v http://%s.%s.svc.cluster.local:%s/metrics"],
 							"securityContext": {
@@ -264,13 +278,13 @@ var _ = Describe("Manager", Ordered, func() {
 						}],
 						"serviceAccount": "%s"
 					}
-				}`, metricsServiceName, namespace, metricsPort, serviceAccountName))
+				}`, metricsCurlImage, metricsServiceName, namespace, metricsPort, serviceAccountName))
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create curl-metrics pod")
 
 			By("waiting for the curl-metrics pod to complete.")
 			verifyCurlUp := func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "pods", "curl-metrics",
+				cmd := exec.Command("kubectl", "get", "pods", plainMetricsCurlPod,
 					"-o", "jsonpath={.status.phase}",
 					"-n", namespace)
 				output, err := utils.Run(cmd)
@@ -329,15 +343,15 @@ var _ = Describe("Manager", Ordered, func() {
 
 			By("reconfiguring the manager with secure metrics and the mounted serving certificate")
 			securePatch := fmt.Sprintf(`[
-				{"op":"replace","path":"/spec/template/spec/containers/0/args/3","value":"--metrics-secure=true"},
+				{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--metrics-secure=true"},
 				{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--metrics-service-monitor-enabled=false"},
 				{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--metrics-cert-path=%s"},
-				{"op":"add","path":"/spec/template/spec/containers/0/volumeMounts/-",
-				 "value":{"name":"metrics-certs","mountPath":"%s","readOnly":true}},
-				{"op":"add","path":"/spec/template/spec/volumes/-",
-				 "value":{"name":"metrics-certs","secret":{"secretName":"%s","optional":false,
+				{"op":"add","path":"/spec/template/spec/containers/0/volumeMounts",
+				 "value":[{"name":"metrics-certs","mountPath":"%s","readOnly":true}]},
+				{"op":"add","path":"/spec/template/spec/volumes",
+				 "value":[{"name":"metrics-certs","secret":{"secretName":"%s","optional":false,
 				 "items":[{"key":"ca.crt","path":"ca.crt"},{"key":"tls.crt","path":"tls.crt"},
-				 {"key":"tls.key","path":"tls.key"}]}}}
+				 {"key":"tls.key","path":"tls.key"}]}}]}
 			]`, metricsCertificateMountPath, metricsCertificateMountPath, metricsServerCertificateSecret)
 			cmd = exec.Command("kubectl", "patch", "deployment", "hyperfleet-operator-controller-manager",
 				"--namespace", namespace, "--type=json", "--patch", securePatch)
@@ -352,28 +366,24 @@ var _ = Describe("Manager", Ordered, func() {
 			By("waiting for the replacement manager Pod")
 			Eventually(func(g Gomega) {
 				cmd = exec.Command("kubectl", "get", "pods", "-l", "control-plane=controller-manager",
-					"-o", "jsonpath={.items[0].metadata.name}", "--namespace", namespace)
+					"-o", activeManagerPodsTemplate, "--namespace", namespace)
 				output, getErr := utils.Run(cmd)
 				g.Expect(getErr).NotTo(HaveOccurred())
-				g.Expect(strings.TrimSpace(output)).NotTo(BeEmpty())
-				controllerPodName = strings.TrimSpace(output)
+				podNames := utils.GetNonEmptyLines(output)
+				g.Expect(podNames).To(HaveLen(1), "expected exactly one non-terminating manager Pod")
+				controllerPodName = podNames[0]
 			}).Should(Succeed())
 
 			By("scraping through the Service with the CA and a ServiceAccount bearer token")
-			cmd = exec.Command("kubectl", "delete", "pod", "curl-metrics", "--namespace", namespace,
-				"--ignore-not-found=true", "--wait=true")
-			_, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred())
-
 			secureMetricsURL := fmt.Sprintf("https://%s.%s.svc.cluster.local:%s/metrics",
 				metricsServiceName, namespace, metricsPort)
-			cmd = exec.Command("kubectl", "run", "curl-metrics", "--restart=Never", "--namespace", namespace,
-				"--image=curlimages/curl:latest", "--overrides", fmt.Sprintf(`{
+			cmd = exec.Command("kubectl", "run", secureMetricsCurlPod, "--restart=Never", "--namespace", namespace,
+				"--image="+metricsCurlImage, "--overrides", fmt.Sprintf(`{
 					"spec": {
 						"serviceAccount": %q,
 						"containers": [{
 							"name": "curl",
-							"image": "curlimages/curl:latest",
+							"image": %q,
 							"command": ["/bin/sh", "-c"],
 							"args": [%q],
 							"volumeMounts": [{"name": "metrics-ca", "mountPath": "/var/run/metrics", "readOnly": true}],
@@ -387,22 +397,56 @@ var _ = Describe("Manager", Ordered, func() {
 						}],
 						"volumes": [{"name": "metrics-ca", "secret": {"secretName": %q, "items": [{"key": "ca.crt", "path": "ca.crt"}]}}]
 					}
-				}`, serviceAccountName,
+				}`, serviceAccountName, metricsCurlImage,
 					fmt.Sprintf(secureMetricsCurlCommand, secureMetricsURL), metricsServerCertificateSecret))
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 
 			Eventually(func(g Gomega) {
-				cmd = exec.Command("kubectl", "get", "pod", "curl-metrics", "--namespace", namespace,
+				cmd = exec.Command("kubectl", "get", "pod", secureMetricsCurlPod, "--namespace", namespace,
 					"-o", "jsonpath={.status.phase}")
 				output, getErr := utils.Run(cmd)
 				g.Expect(getErr).NotTo(HaveOccurred())
+				if output == "Failed" {
+					StopTrying("secure metrics curl Pod failed; inspect its logs for the scrape error").Now()
+				}
 				g.Expect(output).To(Equal("Succeeded"))
 			}, 5*time.Minute).Should(Succeed())
 
-			metricsOutput, err := utils.Run(exec.Command("kubectl", "logs", "curl-metrics", "--namespace", namespace))
+			metricsOutput, err := utils.Run(exec.Command("kubectl", "logs", secureMetricsCurlPod, "--namespace", namespace))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(metricsOutput).To(ContainSubstring("hyperfleet_operator_up"))
+
+			// The remaining specs in this Ordered suite must see the original
+			// manager Deployment. On a failure, AfterAll tears down the entire
+			// test install instead of attempting to restore a deleted Deployment.
+			By("restoring the manager Deployment after the secure scrape")
+			_, err = utils.Run(exec.Command("kubectl", "rollout", "undo",
+				"deployment/hyperfleet-operator-controller-manager", "--namespace", namespace))
+			Expect(err).NotTo(HaveOccurred(), "Failed to restore the manager Deployment")
+			_, err = utils.Run(exec.Command("kubectl", "rollout", "status",
+				"deployment/hyperfleet-operator-controller-manager", "--namespace", namespace, "--timeout=2m"))
+			Expect(err).NotTo(HaveOccurred(), "Restored manager Deployment did not become ready")
+			Eventually(func(g Gomega) {
+				output, getErr := utils.Run(exec.Command("kubectl", "get", "pods",
+					"-l", "control-plane=controller-manager", "-o", activeManagerPodsTemplate,
+					"--namespace", namespace))
+				g.Expect(getErr).NotTo(HaveOccurred())
+				podNames := utils.GetNonEmptyLines(output)
+				g.Expect(podNames).To(HaveLen(1), "expected exactly one restored manager Pod")
+				controllerPodName = podNames[0]
+			}).Should(Succeed())
+
+			By("removing the secure scrape test resources")
+			_, err = utils.Run(exec.Command("kubectl", "delete", "pod", secureMetricsCurlPod,
+				"--namespace", namespace, "--ignore-not-found=true", "--wait=false"))
+			Expect(err).NotTo(HaveOccurred())
+			_, err = utils.Run(exec.Command("kubectl", "delete", "secret", metricsServerCertificateSecret,
+				"--namespace", namespace, "--ignore-not-found=true", "--wait=false"))
+			Expect(err).NotTo(HaveOccurred())
+			_, err = utils.Run(exec.Command("kubectl", "delete", "clusterrolebinding", metricsReaderBinding,
+				"--ignore-not-found=true", "--wait=false"))
+			Expect(err).NotTo(HaveOccurred())
 		})
 
 		It("should scope operand authorization to the operator namespace", func() {
@@ -608,7 +652,10 @@ func managerCanIWithArgs(args []string, resourceNamespace string) bool {
 	if resourceNamespace != "" {
 		args = append(args, "-n", resourceNamespace)
 	}
-	output, err := utils.Run(exec.Command("kubectl", args...))
+	// kubectl writes scope warnings to stderr while its authorization answer is
+	// on stdout. CombinedOutput would turn a valid "yes" into unrecognized text.
+	outputBytes, err := exec.Command("kubectl", args...).Output()
+	output := string(outputBytes)
 	allowed, recognized := parseCanIOutput(output)
 	if recognized {
 		if !allowed {
