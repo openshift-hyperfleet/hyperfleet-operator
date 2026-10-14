@@ -54,7 +54,7 @@ func TestE2E(t *testing.T) {
 
 var _ = BeforeSuite(func() {
 	By("building the manager(Operator) image")
-	cmd := exec.Command("make", "image", fmt.Sprintf("OPERATOR_IMG=%s", projectImage))
+	cmd := exec.Command("make", managerImageBuildArgs(os.Getenv("KIND_EXPERIMENTAL_PROVIDER"))...)
 	_, err := utils.Run(cmd)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the manager(Operator) image")
 
@@ -79,6 +79,16 @@ var _ = BeforeSuite(func() {
 		}
 	}
 })
+
+func managerImageBuildArgs(provider string) []string {
+	args := []string{"image", fmt.Sprintf("OPERATOR_IMG=%s", projectImage)}
+	// The loader saves from Podman's image store for this provider, so the
+	// image must also be built there, even when CONTAINER_TOOL is not set.
+	if provider == "podman" {
+		args = append(args, "CONTAINER_TOOL=podman")
+	}
+	return args
+}
 
 var _ = AfterSuite(func() {
 	// Teardown CertManager after the suite if not skipped and if it was not already installed

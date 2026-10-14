@@ -70,6 +70,7 @@ const (
 	plainMetricsCurlPod            = "curl-metrics"
 	secureMetricsCurlPod           = "curl-secure-metrics"
 	metricsCurlImage               = "curlimages/curl:8.16.0"
+	invalidBearerTokenLogPattern   = `(?m)^.*Authentication failed[^\n]*"error":\s*"invalid bearer token"`
 	activeManagerPodsTemplate      = `go-template={{ range .items }}` +
 		`{{ if not .metadata.deletionTimestamp }}` +
 		`{{ .metadata.name }}{{ "\n" }}{{ end }}{{ end }}`
@@ -88,13 +89,22 @@ if [ "$status" != "401" ]; then
 fi
 echo "unauthenticated metrics request rejected (HTTP 401)"
 # Tamper with the signed token to check that merely presenting a bearer token is insufficient.
+invalid_response_file=$(mktemp)
+trap 'rm -f "$invalid_response_file"' EXIT
 invalid_status=$(curl --silent --show-error --connect-timeout 5 --max-time 20 \
-  --retry 3 --retry-delay 2 --output /dev/null --write-out '%%{http_code}' \
+  --retry 3 --retry-delay 2 --output "$invalid_response_file" --write-out '%%{http_code}' \
   --cacert /var/run/metrics/ca.crt \
   --header "Authorization: Bearer ${token}invalid" "$url")
 case "$invalid_status" in
   4[0-9][0-9]|5[0-9][0-9]) ;;
   *) echo "expected invalid bearer token to be rejected, got HTTP $invalid_status" >&2; exit 1 ;;
+esac
+# controller-runtime v0.25.2 returns 500 for the invalid-bearer-token error.
+# Do not accept a status alone: check the auth response here and the precise
+# authentication error in the fresh manager Pod's logs in the Go assertion.
+case "$(cat "$invalid_response_file")" in
+  "Authentication failed"|"Unauthorized") ;;
+  *) echo "invalid-token response was not an authentication failure" >&2; exit 1 ;;
 esac
 echo "invalid bearer token rejected (HTTP $invalid_status)"
 untrusted_exit=0
@@ -106,7 +116,11 @@ if [ "$untrusted_exit" -ne 60 ]; then
   echo "expected untrusted metrics CA to fail TLS verification (curl exit 60), got $untrusted_exit" >&2
   exit 1
 fi
-echo "untrusted metrics CA rejected (curl exit 60)"`
+echo "untrusted metrics CA rejected (curl exit 60)"
+# Confirm that the endpoint still serves authenticated requests after the failures.
+curl --fail --show-error --silent --connect-timeout 5 --max-time 20 \
+  --retry 3 --retry-delay 2 --retry-all-errors --cacert /var/run/metrics/ca.crt \
+  --header "Authorization: Bearer $token" "$url"`
 )
 
 const cleanupTimeout = 30 * time.Second
@@ -465,6 +479,15 @@ var _ = Describe("Manager", Ordered, func() {
 			Expect(metricsOutput).To(ContainSubstring("unauthenticated metrics request rejected (HTTP 401)"))
 			Expect(metricsOutput).To(ContainSubstring("invalid bearer token rejected (HTTP "))
 			Expect(metricsOutput).To(ContainSubstring("untrusted metrics CA rejected (curl exit 60)"))
+
+			// A generic HTTP 500 (including a TokenReview outage) is not proof
+			// of token rejection. This isolated, freshly rolled-out manager must
+			// report the specific invalid-token error from the authentication layer.
+			managerOutput, err := utils.Run(exec.Command("kubectl", "logs", controllerPodName,
+				"--namespace", namespace, "--container", "manager"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(managerOutput).To(MatchRegexp(invalidBearerTokenLogPattern),
+				"expected the authentication layer to reject the tampered bearer token")
 
 			// The remaining specs in this Ordered suite must see the original
 			// manager Deployment. On a failure, AfterAll tears down the entire

@@ -24,6 +24,8 @@ patches:
 # Derive SNI from the rendered Service, after the default overlay applies its
 # name prefix and namespace. This prevents a non-default namespace or prefix
 # from leaving the ServiceMonitor with a certificate name for hyperfleet-system.
+# Also place the ServiceMonitor in that namespace: without namespaceSelector,
+# it only discovers Services in its own namespace.
 replacements:
 - source:
     kind: Service
@@ -59,3 +61,10 @@ replacements:
       delimiter: '.'
       index: 1
       create: true
+  - select:
+      kind: ServiceMonitor
+      group: monitoring.coreos.com
+      version: v1
+      name: controller-manager-metrics-monitor
+    fieldPaths:
+    - metadata.namespace

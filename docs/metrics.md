@@ -327,10 +327,14 @@ separately.
 For GitOps, use the checked-in `config/secure-metrics` Kustomize overlay, rather
 than applying the plain-HTTP `config/prometheus` base. It configures the manager
 with secure serving, mounts `metrics-server-cert`, disables the runtime
-bootstrapper, and emits the corresponding static ServiceMonitor. Its TLS server
-name is derived from the rendered metrics Service, so changing the Kustomize
-namespace or name prefix produces the matching `<service>.<namespace>.svc` name
-instead of retaining a `hyperfleet-system` literal. Before applying it, create
+bootstrapper, and emits the corresponding static ServiceMonitor. The overlay
+derives both the ServiceMonitor namespace and its TLS server name from the metrics
+Service. Changing `namespace` or `namePrefix` in `config/default/kustomization.yaml`,
+or setting them in `config/secure-metrics/kustomization.yaml`, keeps the monitor
+in the Service's namespace with the matching `<service>.<namespace>.svc` name.
+If a parent overlay changes these fields after this overlay has rendered, it must
+also update the TLS server name; nested replacements do not run again in the parent.
+Before applying it, create
 `metrics-server-cert` (`ca.crt`, `tls.crt`, and `tls.key`) and
 `hyperfleet-metrics-scrape-credentials` (`token`) in the operator namespace.
 The secure overlay sets `scheme: https`, CA verification, and Secret-backed

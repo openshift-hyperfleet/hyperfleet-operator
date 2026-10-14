@@ -17,13 +17,21 @@ limitations under the License.
 package servicemonitor
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/rest"
 )
 
@@ -156,6 +164,98 @@ func TestBuildServiceMonitorSecure(t *testing.T) {
 	}
 	if _, found := ep["bearerTokenFile"]; found {
 		t.Errorf("endpoint uses bearerTokenFile: %v", ep)
+	}
+}
+
+// Render the real manifests with the repository's pinned Kustomize, rather
+// than duplicating its replacement and namespace transformation rules in Go.
+func TestSecureMetricsManifests(t *testing.T) {
+	const (
+		noCustomization = "none"
+		serviceKind     = "Service"
+		secureScheme    = "https"
+	)
+	for _, customization := range []string{noCustomization, "default", "secure-metrics"} {
+		t.Run(customization, func(t *testing.T) {
+			configDir := filepath.Join(t.TempDir(), "config")
+			if err := os.CopyFS(configDir, os.DirFS("../../config")); err != nil {
+				t.Fatal(err)
+			}
+			if customization != noCustomization {
+				path := filepath.Join(configDir, customization, "kustomization.yaml")
+				content, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if customization == "default" {
+					content = []byte(strings.ReplaceAll(string(content), "namespace: hyperfleet-system", "namespace: custom-system"))
+					content = []byte(strings.ReplaceAll(string(content), "namePrefix: hyperfleet-operator-", "namePrefix: custom-"))
+				} else {
+					content = append(content, []byte("\nnamespace: custom-system\nnamePrefix: custom-\n")...)
+				}
+				if err := os.WriteFile(path, content, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			cmd := exec.Command("go", "tool", "-modfile=../../tools/go.mod", "kustomize", "build",
+				filepath.Join(configDir, "secure-metrics"))
+			var buildErrors bytes.Buffer
+			cmd.Stderr = &buildErrors
+			output, err := cmd.Output()
+			if err != nil {
+				t.Fatalf("kustomize build: %v\n%s", err, buildErrors.String())
+			}
+			var service, monitor unstructured.Unstructured
+			decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewReader(output), 4096)
+			for {
+				var resource unstructured.Unstructured
+				if err := decoder.Decode(&resource.Object); errors.Is(err, io.EOF) {
+					break
+				} else if err != nil {
+					t.Fatal(err)
+				}
+				switch resource.GetKind() {
+				case serviceKind:
+					service = resource
+				case "ServiceMonitor":
+					monitor = resource
+				}
+			}
+			if service.GetName() == "" || monitor.GetName() == "" {
+				t.Fatal("rendered metrics Service or ServiceMonitor is missing")
+			}
+			wantNamespace := "hyperfleet-system"
+			if customization != noCustomization {
+				wantNamespace = "custom-system"
+			}
+			if service.GetNamespace() != wantNamespace || monitor.GetNamespace() != wantNamespace {
+				t.Errorf("Service namespace = %q, ServiceMonitor namespace = %q; want both %q",
+					service.GetNamespace(), monitor.GetNamespace(), wantNamespace)
+			}
+			endpoints, found, err := unstructured.NestedSlice(monitor.Object, "spec", "endpoints")
+			if err != nil || !found || len(endpoints) != 1 {
+				t.Fatalf("endpoints = %v, found=%t, err=%v", endpoints, found, err)
+			}
+			endpoint := endpoints[0].(map[string]any)
+			wantServerName := service.GetName() + "." + service.GetNamespace() + ".svc"
+			serverName, _, err := unstructured.NestedString(endpoint, "tlsConfig", "serverName")
+			if err != nil || serverName != wantServerName {
+				t.Errorf("serverName = %q, err=%v; want %q", serverName, err, wantServerName)
+			}
+			if endpoint["scheme"] != secureScheme {
+				t.Errorf("scheme = %v, want https", endpoint["scheme"])
+			}
+			selector, _, err := unstructured.NestedStringMap(monitor.Object, "spec", "selector", "matchLabels")
+			if err != nil || len(selector) == 0 {
+				t.Fatalf("ServiceMonitor selector = %v, err=%v", selector, err)
+			}
+			for key, value := range selector {
+				if service.GetLabels()[key] != value {
+					t.Errorf("Service label %q = %q, want %q", key, service.GetLabels()[key], value)
+				}
+			}
+		})
 	}
 }
 
