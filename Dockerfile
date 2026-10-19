@@ -1,6 +1,6 @@
 ARG BASE_IMAGE=registry.access.redhat.com/ubi9/ubi-minimal:latest
 
-FROM registry.access.redhat.com/ubi9/go-toolset:9.8-1791479310 AS builder
+FROM registry.access.redhat.com/ubi9/go-toolset:9.8-1792010711 AS builder
 
 # No .git in the build container, so APP_VERSION/GIT_SHA (embedded via
 # -ldflags -X in `make build`, see internal/version) arrive as build-args.

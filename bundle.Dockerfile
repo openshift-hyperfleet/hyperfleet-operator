@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/ubi9/go-toolset:9.8-1791479310 AS validator
+FROM registry.access.redhat.com/ubi9/go-toolset:9.8-1792010711 AS validator
 
 WORKDIR /workdir
 COPY validators/ ./validators/
