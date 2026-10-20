@@ -75,6 +75,16 @@ fmt: ## Run go fmt against code.
 vet: ## Run go vet against code.
 	go vet ./...
 
+.PHONY: gofmt
+gofmt: fmt ## Alias for fmt (used by the hyperfleet-gofmt pre-commit hook).
+
+.PHONY: go-vet
+go-vet: vet ## Alias for vet (used by the hyperfleet-go-vet pre-commit hook).
+
+.PHONY: install-hooks
+install-hooks: ## Install pre-commit hooks.
+	pre-commit install
+
 ##@ Testing
 ENVTEST_K8S_VERSION ?= $(shell go list -m -f "{{ .Version }}" k8s.io/api | awk -F'[v.]' '{printf "1.%d", $$3}')
 KIND_CLUSTER ?= hyperfleet-operator-test-e2e

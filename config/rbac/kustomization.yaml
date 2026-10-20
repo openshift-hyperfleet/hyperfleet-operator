@@ -26,4 +26,3 @@ resources:
 - hyperfleetconfig_admin_role.yaml
 - hyperfleetconfig_editor_role.yaml
 - hyperfleetconfig_viewer_role.yaml
-

@@ -9,7 +9,8 @@ operator-owned implementation details.
 
 - **Contributing or developing locally:** follow the
   [developer guide](docs/developer-guide.md) for prerequisites, local validation,
-  and end-to-end testing.
+  and end-to-end testing. Start with `make install-hooks` to set up the git
+  hooks (secret scanning, commitlint, linting, file hygiene).
 - **Installing through OLM:** follow the
   [OLM bundle, catalog, and development installation guide](docs/olm.md).
 - **Installing on a disconnected OpenShift cluster:** follow the

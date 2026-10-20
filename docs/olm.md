@@ -160,16 +160,16 @@ Quick testing with `operator-sdk run bundle` (no catalog needed).
     ```bash
     # Install Operator Lifecycle Manager in your cluster
     operator-sdk olm install
-    
+
     # Install hyperfleet-operator from bundle
     operator-sdk run bundle $BUNDLE_IMG -n <NAMESPACE>
-   
+
     # Apply an example hyperfleetconfig cr
     kubectl apply -k config/samples/
-    
+
     # Cleanup when done - IMPORTANT: Delete CRs before uninstalling operator
     kubectl delete hyperfleetconfig --all
-    
+
     # Uninstall hyperfleet-operator
     operator-sdk cleanup hyperfleet-operator -n <NAMESPACE>
     # Uninstall olm

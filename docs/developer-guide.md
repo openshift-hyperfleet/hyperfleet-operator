@@ -19,12 +19,17 @@ not duplicated here.
 - `envsubst` (provided by gettext) for development OLM bundle overlays.
 - `kubectl` and access to the cluster used for local runs.
 - `kind` for end-to-end tests.
+- [pre-commit](https://pre-commit.com/#install) for the repository git hooks.
 - Network access when tools, envtest assets, base images, or cert-manager must be
   downloaded.
 
 Repository tools such as `controller-gen`, `golangci-lint`, `kustomize`, and
 `setup-envtest` are pinned in `tools/go.mod` and invoked through `go tool`; a
 separate global installation is not required.
+
+Run `make install-hooks` once after cloning to install the git hooks (LeakTK
+secret scanning, commit message validation, Go tooling checks, and file
+hygiene), configured in `.pre-commit-config.yaml`.
 
 The current `.devcontainer/devcontainer.json` still selects Go 1.24 and does not
 meet the `go.mod` requirement. Until that file is upgraded, do not treat the
