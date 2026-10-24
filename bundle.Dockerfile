@@ -1,6 +1,10 @@
 FROM registry.access.redhat.com/ubi9/go-toolset:9.8-1792010711 AS validator
 
+USER root
 WORKDIR /workdir
+RUN chown 1001:0 /workdir
+USER 1001
+
 COPY validators/ ./validators/
 COPY go.mod go.mod
 COPY go.sum go.sum
@@ -9,7 +13,11 @@ RUN go build -o ./bin/related-images-validator ./validators/related-images/
 
 FROM quay.io/konflux-ci/operator-sdk-builder:latest@sha256:bc390cc52ffdd350f146932e0383e7843b509e51dde0c34d0f68b025ed6ff871 AS builder
 
+USER root
 WORKDIR /workdir
+RUN chown 1001:0 /workdir
+USER 1001
+
 COPY config/ ./config/
 COPY --from=validator /workdir/bin/related-images-validator ./related-images-validator
 

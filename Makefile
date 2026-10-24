@@ -289,7 +289,7 @@ undeploy: ## Undeploy controller from the K8s cluster specified in ~/.kube/confi
 # Install resources:  kubectl apply -f dist/install.yaml
 # Uninstall resources: kubectl delete -f dist/install.yaml
 # Override images via env vars:
-#   make build-deployer RELATED_IMAGE_HYPERFLEET_OPERATOR=<op-img> RELATED_IMAGE_HYPERFLEET_API=<api-img>
+#   make build-deployer RELATED_IMAGE_HYPERFLEET_OPERATOR=<op-img> RELATED_IMAGE_HYPERFLEET_API=<api-img> RELATED_IMAGE_HYPERFLEET_SENTINEL=<sentinel-img>
 
 .PHONY: build-deployer
 build-deployer: manifests generate ## Generate a consolidated YAML with CRDs and deployment.
@@ -349,8 +349,8 @@ endif
 
 # Substitutes RELATED_IMAGE_* env vars into patch-images.yaml via envsubst,
 # then builds the bundle image. This mirrors the Konflux pipeline bundle build.
-# To override the operator and API images:
-#   make bundle-build RELATED_IMAGE_HYPERFLEET_OPERATOR=<image> RELATED_IMAGE_HYPERFLEET_API=<image>
+# To override the operator, API and Sentinel images:
+#   make bundle-build RELATED_IMAGE_HYPERFLEET_OPERATOR=<image> RELATED_IMAGE_HYPERFLEET_API=<image> RELATED_IMAGE_HYPERFLEET_SENTINEL=<image>
 KUSTOMIZE_VARIANT ?= config/manifests/dev
 # For dev builds - unset validation of related images
 VALIDATE_RELATED_IMAGES ?= false

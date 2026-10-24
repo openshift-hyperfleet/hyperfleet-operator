@@ -46,13 +46,25 @@ package/channel. The example selects the channel head in that immutable catalog
 snapshot. Select a publisher-supported version range if you need older bundles
 or an upgrade path.
 
-Use `mirror.operators`. Do not enumerate the bundle, operator and API under
-`additionalImages`: that bypasses catalog bundle and related-image discovery.
-The catalog digest is the only release input to `oc-mirror`; it selects the OLM
-bundle and its related images. The repository CSV is not an installation input.
-List any dependent operator packages explicitly; `oc-mirror` does not infer
-inter-operator dependencies. Do not use `skipDependencies` or blocked-image
-filters to suppress required release content.
+Use `mirror.operators`. Do not enumerate the bundle, operator, API and Sentinel
+under `additionalImages`: that bypasses catalog bundle and related-image
+discovery. The catalog digest is the only release input to `oc-mirror`; it
+selects the OLM bundle and its related images. The repository CSV is not an
+installation input. List any dependent operator packages explicitly; `oc-mirror`
+does not infer inter-operator dependencies. Do not use `skipDependencies` or
+blocked-image filters to suppress required release content.
+
+A release bundle's `relatedImages` carries these repositories, all under
+`quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/`. Expect each of
+them in the mirror; `oc-mirror` discovers them from the catalog, so they are not
+`additionalImages` input:
+
+- `hyperfleet-operator`: the operator manager.
+- `hyperfleet-api`: the API operand.
+- `hyperfleet-sentinel`: the Sentinel operand, one Deployment per resource type.
+
+The bundle pins each image by digest. Take the digests from the selected
+bundle, not from this guide.
 
 ## 2. Export and transfer
 
@@ -180,9 +192,10 @@ OperatorGroup.
 
 Create a valid HyperFleetConfig and its referenced Secrets, with reachable
 database and authentication services as required by that configuration. Confirm
-operator and API readiness and inspect pod events for failed pulls. Compare
-runtime images with the selected release bundle; multi-architecture image IDs
-may identify platform manifests beneath the declared image index.
+operator, API and Sentinel readiness, and inspect the pod events of each for
+failed pulls. Compare runtime images with the selected release bundle;
+multi-architecture image IDs may identify platform manifests beneath the
+declared image index.
 
 For the release installed by this guide, provide the database Secret referenced
 by `spec.api.database.secretRef.name`; database provisioning is outside this
