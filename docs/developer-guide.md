@@ -41,8 +41,6 @@ devcontainer as a supported build environment for this branch.
 - [Repository layout](#repository-layout)
 - [Reconciliation model](#reconciliation-model)
 - [Local development workflow](#local-development-workflow)
-  - [AI coding instructions](#ai-coding-instructions)
-  - [Local checks](#local-checks)
   - [Running the manager from the host](#running-the-manager-from-the-host)
   - [Running the manager in a cluster](#running-the-manager-in-a-cluster)
 - [End-to-end tests](#end-to-end-tests)
@@ -94,36 +92,7 @@ before adding an operand.
 
 ## Local development workflow
 
-### AI coding instructions
-
-[`AGENTS.md`](../AGENTS.md) is the canonical repository instruction file.
-The root [`CLAUDE.md`](../CLAUDE.md) contains only `@AGENTS.md`, so Claude Code
-imports the same guidance without a second copy. Keep that compatibility shim
-for team setups that discover `CLAUDE.md`; do not put independent instructions
-in it. Other tools can read `AGENTS.md` directly. No plugin is required for the
-Claude Code import.
-
-The root import was verified with Claude Code v2.1.291, with project instruction
-loading enabled and no instruction-mode override. A fresh non-interactive
-session with tools disabled could identify the singleton, pure component
-methods, rollout-input methods, and disposable-cluster warning from the loaded
-guidance without reading files. To repeat the check from the repository root:
-
-```sh
-claude --print --no-session-persistence --setting-sources project \
-  --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
-  --settings '{"disableAllHooks":true}' --tools '' \
-  'Without reading files or using tools, identify the singleton, cluster-I/O-free methods, rollout-input methods, and E2E cluster warning from the loaded repository instructions. Say ABSENT if they are not loaded.'
-```
-
-Select an available model with `--model` if your deployment's default is not
-available. Do not use `--bare`, `--safe-mode`, or an empty `--setting-sources`
-for this check: those disable instruction discovery or project instruction
-loading and cannot validate the import. This check establishes root-file
-loading, not nested instruction behavior or compatibility with every older
-Claude Code release.
-
-### Local checks
+Repository coding-agent guidance lives in [`AGENTS.md`](../AGENTS.md).
 
 Start by confirming that generated files agree with the API and RBAC markers:
 
