@@ -27,7 +27,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -146,20 +145,23 @@ func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, fmt.Errorf("get HyperFleetConfig %q: %w", req.NamespacedName, err)
 	}
 
-	// componentConditions, componentsCollected and missingSecrets feed
+	// componentStatuses, componentsCollected and missingSecrets feed
 	// aggregateStatus in the deferred status update below. They are populated as
 	// reconciliation proceeds so that a mid-loop failure (reterr set, named
 	// return) still writes status with whatever was learned before the failure
 	// — e.g. a missing Secret discovered before a later component's apply fails
-	// still surfaces as Degraded. componentsCollected is set true only once the
+	// still surfaces as Degraded. componentStatuses carries each successfully
+	// observed component's conditions under its own name, so per-component
+	// status entries (HYPERFLEET-1653) are written only for components that
+	// actually reported in. componentsCollected is set true only once the
 	// per-component loop below completes without error; aggregateStatus uses it
 	// to avoid publishing a fabricated Available/Progressing value when the
 	// real state was never actually checked this reconcile.
-	var componentConditions []metav1.Condition
+	var componentStatuses []hyperfleetv1alpha1.ComponentStatus
 	var componentsCollected bool
 	var missingSecrets []string
 	defer func() {
-		if aggregateStatus(cr, componentConditions, componentsCollected, missingSecrets, reterr) {
+		if aggregateStatus(cr, componentStatuses, componentsCollected, missingSecrets, reterr) {
 			if err := r.Status().Update(ctx, cr); err != nil {
 				reterr = errors.Join(reterr, fmt.Errorf("update status: %w", err))
 			}
@@ -256,7 +258,10 @@ func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			metrics.IncReconcileError("conditions")
 			return ctrl.Result{}, fmt.Errorf("get conditions for component %q: %w", component.Name(), err)
 		}
-		componentConditions = append(componentConditions, conds...)
+		componentStatuses = append(componentStatuses, hyperfleetv1alpha1.ComponentStatus{
+			Name:       component.Name(),
+			Conditions: conds,
+		})
 	}
 	componentsCollected = true
 

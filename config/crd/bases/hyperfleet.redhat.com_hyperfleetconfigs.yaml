@@ -218,8 +218,108 @@ spec:
               HyperFleetConfigStatus defines the observed state of HyperFleetConfig. It is
               populated by the bundle controller after every reconcile (HYPERFLEET-1409),
               rolling up each component's health into the Available/Progressing/Degraded
-              conditions.
+              conditions, and exposing each component's own conditions in
+              components (HYPERFLEET-1653).
             properties:
+              components:
+                description: |-
+                  components report each bundle component's own conditions alongside the
+                  top-level rollup in conditions, preserving the originating component's
+                  identity. An entry is written only for a component whose health was
+                  actually observed in a given reconcile, so an aborted reconcile leaves
+                  unobserved components' entries untouched rather than fabricating fresh
+                  values for them.
+                items:
+                  description: |-
+                    ComponentStatus is the observed health of a single bundle component, keyed by
+                    its stable component identifier (the bundle.Component Name, e.g. "api" or
+                    "sentinel-clusters"). It carries the conditions that component itself
+                    reported, so partners can distinguish the API's health from Sentinel's
+                    (HYPERFLEET-1653) instead of reading only the installation-wide rollup in
+                    status.conditions. Each condition's observedGeneration is the
+                    HyperFleetConfig generation that was evaluated; an entry whose
+                    observedGeneration lags status.observedGeneration was not freshly evaluated
+                    by the most recent reconcile.
+                  properties:
+                    conditions:
+                      description: |-
+                        conditions are the health conditions the component reported for the
+                        HyperFleetConfig generation recorded in each condition's
+                        observedGeneration. Recognized types are Available and Progressing.
+                      items:
+                        description: Condition contains details for one aspect of
+                          the current state of this API Resource.
+                        properties:
+                          lastTransitionTime:
+                            description: |-
+                              lastTransitionTime is the last time the condition transitioned from one status to another.
+                              This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                            format: date-time
+                            type: string
+                          message:
+                            description: |-
+                              message is a human readable message indicating details about the transition.
+                              This may be an empty string.
+                            maxLength: 32768
+                            type: string
+                          observedGeneration:
+                            description: |-
+                              observedGeneration represents the .metadata.generation that the condition was set based upon.
+                              For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                              with respect to the current state of the instance.
+                            format: int64
+                            minimum: 0
+                            type: integer
+                          reason:
+                            description: |-
+                              reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                              Producers of specific condition types may define expected values and meanings for this field,
+                              and whether the values are considered a guaranteed API.
+                              The value should be a CamelCase string.
+                              This field may not be empty.
+                            maxLength: 1024
+                            minLength: 1
+                            pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                            type: string
+                          status:
+                            description: status of the condition, one of True, False,
+                              Unknown.
+                            enum:
+                            - "True"
+                            - "False"
+                            - Unknown
+                            type: string
+                          type:
+                            description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                            maxLength: 316
+                            pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                            type: string
+                        required:
+                        - lastTransitionTime
+                        - message
+                        - reason
+                        - status
+                        - type
+                        type: object
+                      type: array
+                      x-kubernetes-list-map-keys:
+                      - type
+                      x-kubernetes-list-type: map
+                    name:
+                      description: |-
+                        name is the stable identifier of the bundle component this entry
+                        describes, matching the component names documented in
+                        docs/hyperfleetconfig-reference.md.
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               conditions:
                 description: |-
                   conditions represent the current installation health of the operand.

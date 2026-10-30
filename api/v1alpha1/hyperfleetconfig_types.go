@@ -289,10 +289,39 @@ type HyperFleetConfigSpec struct {
 	API APISpec `json:"api"`
 }
 
+// ComponentStatus is the observed health of a single bundle component, keyed by
+// its stable component identifier (the bundle.Component Name, e.g. "api" or
+// "sentinel-clusters"). It carries the conditions that component itself
+// reported, so partners can distinguish the API's health from Sentinel's
+// (HYPERFLEET-1653) instead of reading only the installation-wide rollup in
+// status.conditions. Each condition's observedGeneration is the
+// HyperFleetConfig generation that was evaluated; an entry whose
+// observedGeneration lags status.observedGeneration was not freshly evaluated
+// by the most recent reconcile.
+type ComponentStatus struct {
+	// name is the stable identifier of the bundle component this entry
+	// describes, matching the component names documented in
+	// docs/hyperfleetconfig-reference.md.
+	//
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name"`
+
+	// conditions are the health conditions the component reported for the
+	// HyperFleetConfig generation recorded in each condition's
+	// observedGeneration. Recognized types are Available and Progressing.
+	//
+	// +listType=map
+	// +listMapKey=type
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
 // HyperFleetConfigStatus defines the observed state of HyperFleetConfig. It is
 // populated by the bundle controller after every reconcile (HYPERFLEET-1409),
 // rolling up each component's health into the Available/Progressing/Degraded
-// conditions.
+// conditions, and exposing each component's own conditions in
+// components (HYPERFLEET-1653).
 type HyperFleetConfigStatus struct {
 	// observedGeneration is the .metadata.generation the operator last acted on.
 	//
@@ -307,6 +336,18 @@ type HyperFleetConfigStatus struct {
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// components report each bundle component's own conditions alongside the
+	// top-level rollup in conditions, preserving the originating component's
+	// identity. An entry is written only for a component whose health was
+	// actually observed in a given reconcile, so an aborted reconcile leaves
+	// unobserved components' entries untouched rather than fabricating
+	// values for them.
+	//
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	Components []ComponentStatus `json:"components,omitempty"`
 }
 
 // +kubebuilder:object:root=true

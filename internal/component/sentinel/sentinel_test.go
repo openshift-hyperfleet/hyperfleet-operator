@@ -18,6 +18,7 @@ package sentinel
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	. "github.com/onsi/gomega"
@@ -357,9 +358,9 @@ func TestRenderServiceAccount(t *testing.T) {
 
 // --- Conditions ---
 
-func deploymentWithStatus(resourceType string, specReplicas, statusReplicas, availableReplicas, updatedReplicas int32, generation int64) *appsv1.Deployment {
+func deploymentWithStatus(specReplicas, statusReplicas, availableReplicas, updatedReplicas int32, generation int64) *appsv1.Deployment {
 	return &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: ResourceName(resourceType), Generation: generation},
+		ObjectMeta: metav1.ObjectMeta{Name: ResourceName(testClustersRt), Generation: generation},
 		Spec:       appsv1.DeploymentSpec{Replicas: new(specReplicas)},
 		Status: appsv1.DeploymentStatus{
 			Replicas:           statusReplicas,
@@ -379,7 +380,7 @@ func TestConditionsNoDeployment(t *testing.T) {
 	byType := condMapByType(conds)
 	g.Expect(byType[hyperfleetv1alpha1.ConditionAvailable].Status).To(Equal(metav1.ConditionFalse))
 	g.Expect(byType[hyperfleetv1alpha1.ConditionAvailable].Reason).To(Equal(hyperfleetv1alpha1.ReasonDeploymentUnavailable))
-	g.Expect(byType[hyperfleetv1alpha1.ConditionAvailable].Message).To(ContainSubstring(testClustersRt))
+	g.Expect(byType[hyperfleetv1alpha1.ConditionAvailable].Message).To(ContainSubstring("does not exist"))
 	g.Expect(byType[hyperfleetv1alpha1.ConditionProgressing].Status).To(Equal(metav1.ConditionTrue))
 	g.Expect(byType[hyperfleetv1alpha1.ConditionProgressing].Reason).To(Equal(hyperfleetv1alpha1.ReasonRolloutInProgress))
 }
@@ -387,7 +388,7 @@ func TestConditionsNoDeployment(t *testing.T) {
 func TestConditionsZeroAvailableReplicas(t *testing.T) {
 	g := NewWithT(t)
 
-	dep := deploymentWithStatus(testClustersRt, 1, 1, 0, 0, 1)
+	dep := deploymentWithStatus(1, 1, 0, 0, 1)
 	conds, err := New(testOptions(BrokerTypeRabbitMQ)).Conditions(context.Background(), testCR(), []client.Object{dep})
 	g.Expect(err).NotTo(HaveOccurred())
 
@@ -399,7 +400,7 @@ func TestConditionsZeroAvailableReplicas(t *testing.T) {
 func TestConditionsPartiallyReady(t *testing.T) {
 	g := NewWithT(t)
 
-	dep := deploymentWithStatus(testClustersRt, 2, 2, 1, 1, 1)
+	dep := deploymentWithStatus(2, 2, 1, 1, 1)
 	conds, err := New(testOptions(BrokerTypeRabbitMQ)).Conditions(context.Background(), testCR(), []client.Object{dep})
 	g.Expect(err).NotTo(HaveOccurred())
 
@@ -412,7 +413,7 @@ func TestConditionsPartiallyReady(t *testing.T) {
 func TestConditionsFullyReadyAndStable(t *testing.T) {
 	g := NewWithT(t)
 
-	dep := deploymentWithStatus(testClustersRt, 1, 1, 1, 1, 1)
+	dep := deploymentWithStatus(1, 1, 1, 1, 1)
 	conds, err := New(testOptions(BrokerTypeRabbitMQ)).Conditions(context.Background(), testCR(), []client.Object{dep})
 	g.Expect(err).NotTo(HaveOccurred())
 
@@ -426,7 +427,7 @@ func TestConditionsFullyReadyAndStable(t *testing.T) {
 func TestConditionsScaledToZero(t *testing.T) {
 	g := NewWithT(t)
 
-	dep := deploymentWithStatus(testClustersRt, 0, 0, 0, 0, 1)
+	dep := deploymentWithStatus(0, 0, 0, 0, 1)
 	conds, err := New(testOptions(BrokerTypeRabbitMQ)).Conditions(context.Background(), testCR(), []client.Object{dep})
 	g.Expect(err).NotTo(HaveOccurred())
 
@@ -438,7 +439,7 @@ func TestConditionsScaledToZero(t *testing.T) {
 func TestConditionsMidRollout(t *testing.T) {
 	g := NewWithT(t)
 
-	dep := deploymentWithStatus(testClustersRt, 1, 1, 1, 1, 2)
+	dep := deploymentWithStatus(1, 1, 1, 1, 2)
 	dep.Status.ObservedGeneration = 1
 	conds, err := New(testOptions(BrokerTypeRabbitMQ)).Conditions(context.Background(), testCR(), []client.Object{dep})
 	g.Expect(err).NotTo(HaveOccurred())
@@ -451,7 +452,7 @@ func TestConditionsMidRollout(t *testing.T) {
 func TestConditionsRolloutStillProgressingWhileOldReplicasRemain(t *testing.T) {
 	g := NewWithT(t)
 
-	dep := deploymentWithStatus(testClustersRt, 1, 2, 1, 1, 1)
+	dep := deploymentWithStatus(1, 2, 1, 1, 1)
 	conds, err := New(testOptions(BrokerTypeRabbitMQ)).Conditions(context.Background(), testCR(), []client.Object{dep})
 	g.Expect(err).NotTo(HaveOccurred())
 
@@ -463,7 +464,7 @@ func TestConditionsRolloutStillProgressingWhileOldReplicasRemain(t *testing.T) {
 func TestConditionsRolloutStillProgressingWhileUpdatedReplicasAreUnavailable(t *testing.T) {
 	g := NewWithT(t)
 
-	dep := deploymentWithStatus(testClustersRt, 1, 1, 0, 1, 1)
+	dep := deploymentWithStatus(1, 1, 0, 1, 1)
 	conds, err := New(testOptions(BrokerTypeRabbitMQ)).Conditions(context.Background(), testCR(), []client.Object{dep})
 	g.Expect(err).NotTo(HaveOccurred())
 
@@ -475,7 +476,7 @@ func TestConditionsRolloutStillProgressingWhileUpdatedReplicasAreUnavailable(t *
 func TestConditionsFindsDeploymentInMixedKindSlice(t *testing.T) {
 	g := NewWithT(t)
 
-	dep := deploymentWithStatus(testClustersRt, 1, 1, 1, 1, 1)
+	dep := deploymentWithStatus(1, 1, 1, 1, 1)
 	applied := []client.Object{
 		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: ResourceName(testClustersRt)}},
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapName(testClustersRt)}},
@@ -495,7 +496,7 @@ func TestConditionsFindsDeploymentInMixedKindSlice(t *testing.T) {
 func TestConditionsNilSpecReplicasDefaultsToOne(t *testing.T) {
 	g := NewWithT(t)
 
-	dep := deploymentWithStatus(testClustersRt, 1, 1, 1, 1, 1)
+	dep := deploymentWithStatus(1, 1, 1, 1, 1)
 	dep.Spec.Replicas = nil
 
 	conds, err := New(testOptions(BrokerTypeRabbitMQ)).Conditions(context.Background(), testCR(), []client.Object{dep})
@@ -506,17 +507,15 @@ func TestConditionsNilSpecReplicasDefaultsToOne(t *testing.T) {
 	g.Expect(byType[hyperfleetv1alpha1.ConditionProgressing].Status).To(Equal(metav1.ConditionFalse))
 }
 
-func TestConditionsMessageIncludesResourceType(t *testing.T) {
+// TestComponentNameIncludesResourceType covers the component identity contract:
+// condition messages are generic ("the Sentinel Deployment ..."), so the
+// resource type travels on the component name — the status.components key and
+// metrics operand label partners read (HYPERFLEET-1653).
+func TestComponentNameIncludesResourceType(t *testing.T) {
 	g := NewWithT(t)
 
 	opts := testOptions(BrokerTypeRabbitMQ)
 	opts.ResourceType = testNodepoolsRt
 
-	dep := deploymentWithStatus(testNodepoolsRt, 1, 1, 1, 1, 1)
-	conds, err := New(opts).Conditions(context.Background(), testCR(), []client.Object{dep})
-	g.Expect(err).NotTo(HaveOccurred())
-
-	for _, c := range conds {
-		g.Expect(c.Message).To(ContainSubstring(testNodepoolsRt), "condition %s message should include resource type", c.Type)
-	}
+	g.Expect(New(opts).Name()).To(Equal(fmt.Sprintf("%s-%s", ComponentName, testNodepoolsRt)))
 }

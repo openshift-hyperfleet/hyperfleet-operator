@@ -135,8 +135,8 @@ func (c *Component) Render(_ context.Context, cr *hyperfleetv1alpha1.HyperFleetC
 func (c *Component) Conditions(_ context.Context, _ *hyperfleetv1alpha1.HyperFleetConfig, applied []client.Object) ([]metav1.Condition, error) {
 	dep := findDeployment(applied, ResourceName(c.ResourceType))
 	return []metav1.Condition{
-		availableCondition(dep, c.ResourceType),
-		progressingCondition(dep, c.ResourceType),
+		availableCondition(dep),
+		progressingCondition(dep),
 	}, nil
 }
 
@@ -160,13 +160,13 @@ func desiredReplicas(dep *appsv1.Deployment) int32 {
 
 // availableCondition derives Available from the Deployment's replica counts;
 // see api.availableCondition for the rationale.
-func availableCondition(dep *appsv1.Deployment, resourceType string) metav1.Condition {
+func availableCondition(dep *appsv1.Deployment) metav1.Condition {
 	if dep == nil {
 		return metav1.Condition{
 			Type:    hyperfleetv1alpha1.ConditionAvailable,
 			Status:  metav1.ConditionFalse,
 			Reason:  hyperfleetv1alpha1.ReasonDeploymentUnavailable,
-			Message: fmt.Sprintf("the Sentinel (%s) Deployment does not exist", resourceType),
+			Message: "the Sentinel Deployment does not exist",
 		}
 	}
 
@@ -178,41 +178,41 @@ func availableCondition(dep *appsv1.Deployment, resourceType string) metav1.Cond
 			Type:    hyperfleetv1alpha1.ConditionAvailable,
 			Status:  metav1.ConditionTrue,
 			Reason:  hyperfleetv1alpha1.ReasonDeploymentAvailable,
-			Message: fmt.Sprintf("the Sentinel (%s) Deployment is scaled to zero", resourceType),
+			Message: "the Sentinel Deployment is scaled to zero",
 		}
 	case dep.Status.AvailableReplicas == 0:
 		return metav1.Condition{
 			Type:    hyperfleetv1alpha1.ConditionAvailable,
 			Status:  metav1.ConditionFalse,
 			Reason:  hyperfleetv1alpha1.ReasonDeploymentUnavailable,
-			Message: fmt.Sprintf("the Sentinel (%s) Deployment has no available replicas", resourceType),
+			Message: "the Sentinel Deployment has no available replicas",
 		}
 	case dep.Status.AvailableReplicas < desired:
 		return metav1.Condition{
 			Type:    hyperfleetv1alpha1.ConditionAvailable,
 			Status:  metav1.ConditionFalse,
 			Reason:  hyperfleetv1alpha1.ReasonDeploymentNotReady,
-			Message: fmt.Sprintf("the Sentinel (%s) Deployment has %d/%d replicas available", resourceType, dep.Status.AvailableReplicas, desired),
+			Message: fmt.Sprintf("the Sentinel Deployment has %d/%d replicas available", dep.Status.AvailableReplicas, desired),
 		}
 	default:
 		return metav1.Condition{
 			Type:    hyperfleetv1alpha1.ConditionAvailable,
 			Status:  metav1.ConditionTrue,
 			Reason:  hyperfleetv1alpha1.ReasonDeploymentAvailable,
-			Message: fmt.Sprintf("the Sentinel (%s) Deployment is available", resourceType),
+			Message: "the Sentinel Deployment is available",
 		}
 	}
 }
 
 // progressingCondition derives Progressing from the same signals Kubernetes
 // uses for rollout completion; see api.progressingCondition.
-func progressingCondition(dep *appsv1.Deployment, resourceType string) metav1.Condition {
+func progressingCondition(dep *appsv1.Deployment) metav1.Condition {
 	if dep == nil {
 		return metav1.Condition{
 			Type:    hyperfleetv1alpha1.ConditionProgressing,
 			Status:  metav1.ConditionTrue,
 			Reason:  hyperfleetv1alpha1.ReasonRolloutInProgress,
-			Message: fmt.Sprintf("the Sentinel (%s) Deployment does not exist yet", resourceType),
+			Message: "the Sentinel Deployment does not exist yet",
 		}
 	}
 
@@ -226,13 +226,13 @@ func progressingCondition(dep *appsv1.Deployment, resourceType string) metav1.Co
 			Type:    hyperfleetv1alpha1.ConditionProgressing,
 			Status:  metav1.ConditionTrue,
 			Reason:  hyperfleetv1alpha1.ReasonRolloutInProgress,
-			Message: fmt.Sprintf("the Sentinel (%s) Deployment rollout has not completed", resourceType),
+			Message: "the Sentinel Deployment rollout has not completed",
 		}
 	}
 	return metav1.Condition{
 		Type:    hyperfleetv1alpha1.ConditionProgressing,
 		Status:  metav1.ConditionFalse,
 		Reason:  hyperfleetv1alpha1.ReasonRolloutComplete,
-		Message: fmt.Sprintf("the Sentinel (%s) Deployment rollout is complete", resourceType),
+		Message: "the Sentinel Deployment rollout is complete",
 	}
 }

@@ -133,7 +133,7 @@ component returns; no component names live in the controller.
   ConfigMap left out of the entries can change without restarting the pods.
 - `ReferencedSecrets()` returns a `component.SecretReference` (a role and
   the Secret name) for every Secret the pods consume, including conditional ones.
-  The controller folds each Secret's `resourceVersion` into that component's 
+  The controller folds each Secret's `resourceVersion` into that component's
   own hash, so a rotation rolls only the components that reference it.
 
 Constraints:
@@ -160,6 +160,17 @@ new published reason is necessary, add a constant, update every writer and
 rollup test, and update the
 [`HyperFleetConfig` reference](hyperfleetconfig-reference.md#condition-reasons)
 in the same change.
+
+The controller publishes the conditions a component returns twice: flattened
+into the top-level `Available`/`Progressing`/`Degraded` rollup, and under the
+component's `Name()` in `status.components` with `observedGeneration` stamped
+to the evaluated HyperFleetConfig generation and `lastTransitionTime`
+normalized by `meta.SetStatusCondition` (see the
+[`HyperFleetConfig` reference](hyperfleetconfig-reference.md#per-component-status)).
+A component therefore needs no new plumbing for per-component status — return
+well-formed conditions from `Conditions()` and both views follow. Keep `Name()`
+stable across operator versions: it is the published key partners read, and it
+must match the `operand` label identity used in metrics.
 
 ### 7. Add observability
 

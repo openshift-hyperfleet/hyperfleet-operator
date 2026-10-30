@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 
@@ -29,6 +30,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -53,6 +55,13 @@ var sentinelResourceTypes = func() []string {
 	}
 	return types
 }()
+
+// sentinelName is the status.components key / operand identity of the Sentinel
+// instance watching the given resource type — the same format
+// sentinel.Component.Name() builds from.
+func sentinelName(rt string) string {
+	return fmt.Sprintf("%s-%s", sentinelcomponent.ComponentName, rt)
+}
 
 // Reconciler behavior specs (HYPERFLEET-1407). These run against envtest, which
 // is apiserver + etcd only: there is NO garbage-collection controller and NO
@@ -478,6 +487,85 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionProgressing).Reason).To(Equal(hyperfleetv1alpha1.ReasonRolloutComplete))
 	})
 
+	It("populates status.components with one entry per component on a healthy reconcile", func() {
+		By("reconciling to create the operands")
+		doReconcile()
+
+		By("marking all Deployments fully ready, as the real Deployment controller would")
+		markAllDeploymentsReady()
+
+		By("reconciling again and reading the per-component status")
+		doReconcile()
+
+		cr := getCR()
+		expected := make([]string, 0, 1+len(sentinelResourceTypes))
+		expected = append(expected, apicomponent.ComponentName)
+		for _, rt := range sentinelResourceTypes {
+			expected = append(expected, sentinelName(rt))
+		}
+
+		Expect(cr.Status.Components).To(HaveLen(len(expected)))
+		for _, name := range expected {
+			entry := componentEntry(cr, name)
+			Expect(entry).NotTo(BeNil(), "expected a status.components entry for %s", name)
+			available := meta.FindStatusCondition(entry.Conditions, hyperfleetv1alpha1.ConditionAvailable)
+			Expect(available).NotTo(BeNil())
+			Expect(available.Status).To(Equal(metav1.ConditionTrue), "component %s should be available", name)
+			Expect(available.ObservedGeneration).To(Equal(cr.Generation),
+				"component %s's conditions must be stamped with the evaluated generation", name)
+		}
+	})
+
+	It("writes partial per-component status when a later component's apply fails mid-loop", func() {
+		By("pre-creating a Deployment whose immutable selector blocks the first Sentinel's apply")
+		// The rendered Sentinel Deployment's selector differs from this one, and
+		// Deployment selectors are immutable, so the operator's server-side
+		// apply of sentinel-clusters fails with a field-is-immutable error —
+		// after the API (the first component) has already applied and reported.
+		blockerLabels := map[string]string{"app": "immutable-selector-blocker"}
+		blocker := &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      sentinelcomponent.ResourceName("clusters"),
+				Namespace: operatorNamespace,
+			},
+			Spec: appsv1.DeploymentSpec{
+				Selector: &metav1.LabelSelector{MatchLabels: blockerLabels},
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: blockerLabels},
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{{Name: "blocker", Image: "example.com/blocker:test"}},
+					},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, blocker)).To(Succeed())
+
+		By("reconciling: the API applies and reports in, then the Sentinel apply fails")
+		createReferencedSecrets()
+		_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: typeNamespacedName})
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("apply component"))
+
+		cr := getCR()
+		By("verifying only the already-observed API entry was written, freshly stamped")
+		Expect(cr.Status.Components).To(HaveLen(1),
+			"only the API, which reconciles before the blocked Sentinel, should have an entry")
+		apiEntry := componentEntry(cr, apicomponent.ComponentName)
+		Expect(apiEntry).NotTo(BeNil())
+		for _, c := range apiEntry.Conditions {
+			Expect(c.ObservedGeneration).To(Equal(cr.Generation),
+				"the API was observed this reconcile and its entry must say so")
+		}
+
+		By("verifying the rollup was not fabricated and Degraded reports the error")
+		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionAvailable)).To(Equal(metav1.Condition{}),
+			"Available must not be fabricated when the loop aborted mid-way")
+		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionProgressing)).To(Equal(metav1.Condition{}),
+			"Progressing must not be fabricated when the loop aborted mid-way")
+		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionDegraded).Status).To(Equal(metav1.ConditionTrue))
+		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionDegraded).Reason).To(Equal(hyperfleetv1alpha1.ReasonReconcileError))
+	})
+
 	It("rolls only the components whose rendered ConfigMap changed", func() {
 		// api.auth.audience feeds only the API's config.yaml; sentinel config
 		// renders from the resource type, API URL, broker topic and the auth
@@ -677,7 +765,13 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 		available := conditionByType(getCR(), hyperfleetv1alpha1.ConditionAvailable)
 		Expect(available.Status).To(Equal(metav1.ConditionFalse))
 		Expect(available.Reason).To(Equal(hyperfleetv1alpha1.ReasonDeploymentUnavailable))
-		Expect(available.Message).To(ContainSubstring("(" + downType + ")"))
+		// The rollup no longer names the component in its message; the failing
+		// Sentinel is identified by its own status.components entry instead.
+		down := componentEntry(getCR(), sentinelName(downType))
+		Expect(down).NotTo(BeNil())
+		downAvailable := meta.FindStatusCondition(down.Conditions, hyperfleetv1alpha1.ConditionAvailable)
+		Expect(downAvailable).NotTo(BeNil())
+		Expect(downAvailable.Status).To(Equal(metav1.ConditionFalse))
 
 		By("restoring the Sentinel: Available recovers")
 		patchDeploymentStatus(sentinelcomponent.ResourceName(downType), func(dep *appsv1.Deployment) {
@@ -706,7 +800,11 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 		progressing := conditionByType(getCR(), hyperfleetv1alpha1.ConditionProgressing)
 		Expect(progressing.Status).To(Equal(metav1.ConditionTrue))
 		Expect(progressing.Reason).To(Equal(hyperfleetv1alpha1.ReasonRolloutInProgress))
-		Expect(progressing.Message).To(ContainSubstring("(" + laggingType + ")"))
+		lagging := componentEntry(getCR(), sentinelName(laggingType))
+		Expect(lagging).NotTo(BeNil())
+		laggingProgressing := meta.FindStatusCondition(lagging.Conditions, hyperfleetv1alpha1.ConditionProgressing)
+		Expect(laggingProgressing).NotTo(BeNil())
+		Expect(laggingProgressing.Status).To(Equal(metav1.ConditionTrue))
 
 		By("catching the Sentinel up: Progressing clears")
 		patchDeploymentStatus(sentinelcomponent.ResourceName(laggingType), func(dep *appsv1.Deployment) {

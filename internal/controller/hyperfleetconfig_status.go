@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"slices"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -25,28 +26,24 @@ import (
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
 )
 
-// aggregateStatus rolls up each component's reported Conditions plus the
-// controller-level Degraded signal (a missing referenced Secret, or a
-// reconcile error) into the CR's top-level status.conditions, and sets
-// status.observedGeneration. It reports whether anything actually changed, so
-// Reconcile can skip a no-op Status().Update() call.
+// aggregateStatus rolls up component health into the CR's status: the
+// controller-level Degraded condition (missing referenced Secrets, reconcile
+// errors) plus Available (AND) and Progressing (OR) over the components'
+// reported conditions into status.conditions, observedGeneration, and each
+// observed component's own entry in status.components (HYPERFLEET-1653). It
+// reports whether anything changed, so Reconcile can skip a no-op
+// Status().Update().
 //
-// Available is the AND of every component's Available condition.
-// Progressing is the OR of every component's Progressing condition. Degraded is driven only
-// by controller-level signals, not by component health, keeping the "component" boundary
-// limited to what it can observe about its own operands (see internal/bundle.Component).
-//
-// componentsCollected must be true only when every component's Conditions()
-// was actually gathered this reconcile (the render/apply/Conditions loop ran
-// to completion without error). When false — Reconcile aborted early, e.g. a
-// failed OIDC discovery or a failed apply before any component reported in —
-// Available/Progressing are deliberately left untouched rather than defaulted
-// to a fabricated healthy value: with zero fresh data, publishing "True" would
-// contradict the Degraded=True this same reconcile is about to report, and
-// would misrepresent an operand whose real state was never checked. Degraded
-// is always evaluated regardless, since a reconcile error is itself the signal.
-func aggregateStatus(cr *hyperfleetv1alpha1.HyperFleetConfig, componentConditions []metav1.Condition, componentsCollected bool, missingSecrets []string, reconcileErr error) bool {
+// componentStatuses carries only components whose Conditions() were actually
+// gathered this reconcile, and componentsCollected is true only when the
+// render/apply/Conditions loop ran to completion. When it did not, Available
+// and Progressing are left at their last-known values rather than fabricated
+// as healthy; Degraded is always evaluated, since a reconcile error is itself
+// the signal.
+func aggregateStatus(cr *hyperfleetv1alpha1.HyperFleetConfig, componentStatuses []hyperfleetv1alpha1.ComponentStatus, componentsCollected bool, missingSecrets []string, reconcileErr error) bool {
 	changed := false
+
+	componentConditions := flattenComponentConditions(cr, componentStatuses)
 
 	conditions := []metav1.Condition{degradedCondition(missingSecrets, reconcileErr)}
 	if componentsCollected {
@@ -64,12 +61,138 @@ func aggregateStatus(cr *hyperfleetv1alpha1.HyperFleetConfig, componentCondition
 		}
 	}
 
+	if mergeComponentStatuses(cr, componentStatuses, componentsCollected) {
+		changed = true
+	}
+
 	if componentsCollected && cr.Status.ObservedGeneration != cr.Generation {
 		cr.Status.ObservedGeneration = cr.Generation
 		changed = true
 	}
 
 	return changed
+}
+
+// flattenComponentConditions returns the conditions the rollup consumes: each
+// observed component's reported conditions, flattened. This is the same data
+// that lands in status.components, so there is a single health calculation.
+//
+// A component reporting an empty condition set (a Conditions() contract
+// violation) falls back to its retained status.components entry's last-known
+// conditions, so the top-level rollup can never contradict that entry. As a
+// consequence the top-level conditions carry cr.Generation even though part of
+// their input was evaluated at an earlier one; the per-component entries keep
+// the truer, per-source stamps.
+func flattenComponentConditions(cr *hyperfleetv1alpha1.HyperFleetConfig, componentStatuses []hyperfleetv1alpha1.ComponentStatus) []metav1.Condition {
+	total := 0
+	for _, cs := range componentStatuses {
+		total += len(cs.Conditions)
+	}
+	conds := make([]metav1.Condition, 0, total)
+	for _, cs := range componentStatuses {
+		reported := cs.Conditions
+		if len(reported) == 0 {
+			if retained := findComponentStatus(cr.Status.Components, cs.Name); retained != nil {
+				reported = retained.Conditions
+			}
+		}
+		conds = append(conds, reported...)
+	}
+	return conds
+}
+
+// mergeComponentStatuses writes each observed component's conditions into its
+// status.components entry, preserving the entry's identity and position and
+// reusing meta.SetStatusCondition so unchanged values keep their
+// lastTransitionTime and produce no change. Each condition's
+// observedGeneration is stamped with the generation evaluated this reconcile,
+// even on one that later aborts — that stamp is how a reader tells an entry
+// that was freshly observed from one that was not.
+//
+// When componentsCollected is true, entries for components no longer in the
+// resolved set are dropped; an aborted reconcile keeps them, since the
+// unobserved remainder of the set is unknown. Similarly, a condition type an
+// observed component stops reporting is dropped from its entry. A component
+// reporting no conditions at all is skipped entirely — an empty report is a
+// contract violation, not an intentional wipe — so it keeps its last-known
+// entry and never gains one.
+func mergeComponentStatuses(cr *hyperfleetv1alpha1.HyperFleetConfig, observed []hyperfleetv1alpha1.ComponentStatus, componentsCollected bool) bool {
+	changed := false
+
+	if componentsCollected {
+		kept := make([]hyperfleetv1alpha1.ComponentStatus, 0, len(cr.Status.Components))
+		for _, existing := range cr.Status.Components {
+			if slices.ContainsFunc(observed, func(cs hyperfleetv1alpha1.ComponentStatus) bool { return cs.Name == existing.Name }) {
+				kept = append(kept, existing)
+			} else {
+				changed = true
+			}
+		}
+		cr.Status.Components = kept
+	}
+
+	for _, cs := range observed {
+		if len(cs.Conditions) == 0 {
+			// Contract violation (see above): keep the last-known entry rather
+			// than persisting a conditions-less one.
+			continue
+		}
+		entry := componentStatusEntry(&cr.Status.Components, cs.Name)
+		changed = pruneStatusConditions(entry, cs.Conditions) || changed
+		for _, cond := range cs.Conditions {
+			cond.ObservedGeneration = cr.Generation
+			if meta.SetStatusCondition(&entry.Conditions, cond) {
+				changed = true
+			}
+		}
+	}
+
+	return changed
+}
+
+// pruneStatusConditions drops conditions from entry whose type is not present
+// in reported, so a condition type a component stopped reporting does not
+// linger with a stale observedGeneration. It reports whether anything was
+// dropped.
+func pruneStatusConditions(entry *hyperfleetv1alpha1.ComponentStatus, reported []metav1.Condition) bool {
+	pruned := false
+	kept := make([]metav1.Condition, 0, len(entry.Conditions))
+	for _, existing := range entry.Conditions {
+		if slices.ContainsFunc(reported, func(c metav1.Condition) bool { return c.Type == existing.Type }) {
+			kept = append(kept, existing)
+		} else {
+			pruned = true
+		}
+	}
+	if pruned {
+		entry.Conditions = kept
+	}
+	return pruned
+}
+
+// findComponentStatus returns the status.components entry with the given name,
+// or nil when none exists. Read-only, unlike componentStatusEntry: it never
+// appends, so the returned pointer stays valid regardless of later mutations.
+func findComponentStatus(components []hyperfleetv1alpha1.ComponentStatus, name string) *hyperfleetv1alpha1.ComponentStatus {
+	for i := range components {
+		if components[i].Name == name {
+			return &components[i]
+		}
+	}
+	return nil
+}
+
+// componentStatusEntry returns a pointer to the status.components entry with
+// the given name, appending a new one when none exists yet (appended, not
+// prepended, so a stable component set renders a stable list). The pointer is
+// invalidated by any subsequent append through components, so complete every
+// write through it before calling again.
+func componentStatusEntry(components *[]hyperfleetv1alpha1.ComponentStatus, name string) *hyperfleetv1alpha1.ComponentStatus {
+	if entry := findComponentStatus(*components, name); entry != nil {
+		return entry
+	}
+	*components = append(*components, hyperfleetv1alpha1.ComponentStatus{Name: name})
+	return &(*components)[len(*components)-1]
 }
 
 // rollupCondition ANDs every component condition of the given type: True only

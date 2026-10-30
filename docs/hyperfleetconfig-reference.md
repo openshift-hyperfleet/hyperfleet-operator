@@ -15,6 +15,7 @@ The generated CRD remains the admission-time source of truth.
   - [Authentication and JWKS selection](#authentication-and-jwks-selection)
   - [Current sizing limitation](#current-sizing-limitation)
 - [Status reference](#status-reference)
+  - [Per-component status](#per-component-status)
   - [Operator conditions versus API resource conditions](#operator-conditions-versus-api-resource-conditions)
   - [Operator condition types](#operator-condition-types)
   - [Condition reasons](#condition-reasons)
@@ -168,6 +169,46 @@ intent, not a sizing guarantee.
 |---|---|
 | `status.observedGeneration` | Latest `.metadata.generation` for which the operator completed component-health collection and status rollup. |
 | `status.conditions` | Map-like list keyed by condition `type`, using Kubernetes `metav1.Condition`. |
+| `status.components` | Map-like list keyed by component `name`, carrying each bundle component's own conditions alongside the top-level rollup. |
+
+### Per-component status
+
+`status.components` preserves the originating component's identity so partners
+can distinguish, for example, the API's health from Sentinel's without
+inspecting individual Deployments. Each entry's `name` is the stable component
+identifier: `api`, plus one `sentinel-<resourceType>` entry per registered
+entity type (e.g. `sentinel-clusters`). Each entry's `conditions` use the
+`Available` and `Progressing` types with the same reasons and
+`metav1.Condition` shape as the operator rollup (`Degraded` remains a
+rollup-level signal only, driven by controller-level reconcile errors and
+missing referenced Secrets), and each condition's `observedGeneration` records
+the `HyperFleetConfig` generation that was evaluated.
+
+An entry is written only for a component whose health was actually observed in
+a given reconcile. When a reconcile aborts early (for example, a later
+component fails to apply), the successfully observed components' entries are
+updated while the unobserved components' entries keep their previous values —
+an entry whose `observedGeneration` lags `status.observedGeneration` was not
+freshly evaluated by the most recent reconcile.
+
+Pruning has two distinct triggers. Entries for components that no longer exist
+in the resolved bundle are dropped on the next *fully successful* reconcile —
+an aborted reconcile keeps them, since the unobserved remainder of the set is
+unknown. Condition types a still-present component stops reporting are dropped
+on the next reconcile that observes that component, except when it reports no
+conditions at all: an empty report is treated as a contract violation rather
+than an intentional wipe, so the component is skipped entirely — it keeps its
+last-known conditions (a component that has never reported conditions never
+gains an entry), and any retained conditions still feed the top-level rollup.
+In that edge case the top-level
+conditions' `observedGeneration` reflects the generation the rollup was
+computed against, even though that component's input was last evaluated at an
+earlier generation; the component's own entry keeps the truer stamp.
+
+These are operator-layer conditions about the operand workloads. They are
+distinct from the status conditions on HyperFleet API resources managed
+*through* the API (see "Operator conditions versus API resource conditions"
+below).
 
 ### Operator conditions versus API resource conditions
 
