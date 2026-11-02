@@ -1,7 +1,7 @@
 # Container image providing oc-mirror v2 and skopeo for disconnected mirroring tests.
 # By default, downloads the official OpenShift release binary from mirror.openshift.com.
 
-FROM registry.access.redhat.com/ubi9/ubi-minimal@sha256:2d4c4551af6831dcd26bbf86108c4385de5183ec8fe6b5868f6f9640fe47f4ed
+FROM registry.access.redhat.com/ubi9/ubi-minimal@sha256:bba2b4bbf0ed15cfe7dd72a1e17ae7d2015a141f306b304e1a2785c41400e39c
 
 ARG TARGETARCH
 ARG OCP_VERSION=4.18.18
