@@ -26,14 +26,6 @@ patches:
     kind: ClusterRole
     metadata:
       name: hyperfleet-operator-managementclusterregistration-admin-role
-- target:
-    kind: ManagementClusterRegistration
-  patch: |-
-    $patch: delete
-    apiVersion: hyperfleet.redhat.com/v1alpha1
-    kind: ManagementClusterRegistration
-    metadata:
-      name: mc-01
 # The Prometheus ServiceMonitor is deliberately NOT included in the bundle. OLM
 # applies a bundle's arbitrary manifests but does not install the CRDs they need,
 # so bundling the ServiceMonitor would fail the InstallPlan — and block the whole

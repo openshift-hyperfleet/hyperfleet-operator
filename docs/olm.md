@@ -74,8 +74,10 @@ unbound administrative role from the matching release:
 make install-registration-api
 ```
 
-The CSV requires this API but does not own it, preventing OLM from aggregating
-registration permissions into generic `admin`/`edit` roles. See
+The CSV neither owns nor requires this API: ownership would aggregate registration
+permissions into generic roles, while a required entry would create an OLM
+provider dependency that the external CRD cannot satisfy. OLM does not enforce
+the bootstrap prerequisite. See
 [registration bootstrap and lifecycle](managementclusterregistration-reference.md#olm-bootstrap-and-lifecycle)
 for explicit delegation, upgrades and uninstall behavior.
 

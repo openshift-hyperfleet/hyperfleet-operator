@@ -51,6 +51,8 @@ spec:
 ```
 
 See the [sample manifest](../config/samples/hyperfleet_v1alpha1_managementclusterregistration.yaml).
+It is deliberately excluded from `config/samples/kustomization.yaml`: review
+and replace its placeholder binding values before applying the file explicitly.
 
 ## Administrative access
 
@@ -84,8 +86,10 @@ when onboarding management clusters; never bind this role to them.
 
 OLM automatically creates roles aggregated into generic `admin`, `edit` and
 `view` for APIs listed as owned in a CSV. To avoid that implicit delegation,
-the registration CRD is intentionally **required, not owned** by the HyperFleet
-OLM bundle. The bundle excludes the CRD, administrator role and example
+the registration CRD is intentionally absent from both the owned and required
+APIs in the HyperFleet CSV. A required API creates a provider dependency in
+OLM's resolver; a manually installed, unowned CRD does not satisfy that dependency.
+The bundle excludes the CRD, administrator role and example
 registration. An administrator installs and maintains the registration API
 separately, before creating the Subscription or running `operator-sdk run bundle`:
 
@@ -93,7 +97,12 @@ separately, before creating the Subscription or running `operator-sdk run bundle
 make install-registration-api
 ```
 
-This installs the generated registration CRD, waits for it to be established,
+This applies the CRD and role files on disk without regenerating them or running
+`controller-gen`. Use an unmodified checkout of the matching release; the target
+does not authenticate local files. Developers regenerate artifacts separately
+with `make manifests`.
+
+The target installs the registration CRD, waits for it to be established,
 and installs the unbound role as `managementclusterregistration-admin-role`
 (without the manifest deployment's `hyperfleet-operator-` prefix). Delegate
 this bootstrap role explicitly if needed:
@@ -115,8 +124,10 @@ kubectl wait --for=condition=Established \
 kubectl apply -f config/rbac/managementclusterregistration_admin_role.yaml
 ```
 
-Without the required API, OLM cannot complete installation. OLM uninstall does
-not remove this external CRD or its records. Upgrade the external CRD/RBAC
+OLM does not enforce this external bootstrap: a successful operator installation
+does not prove that the registration API or role exists. Verify bootstrap
+separately before administering registration records. OLM uninstall does not
+remove this external CRD or its records. Upgrade the external CRD/RBAC
 explicitly alongside releases; do not delete the CRD during a routine uninstall,
 because deletion destroys all registrations. Do not publish a separate OLM
 provider that owns this CRD: that would reintroduce automatic RBAC aggregation.
