@@ -27,19 +27,23 @@ import (
 	"k8s.io/apimachinery/pkg/util/yaml"
 )
 
-const registrationCRDName = "managementclusterregistrations.hyperfleet.redhat.com"
+const (
+	registrationCRDName = "managementclusterregistrations.hyperfleet.redhat.com"
+	defaultOverlay      = "config/default"
+	repositoryRoot      = "../.."
+)
 
 // TestRegistrationPackaging keeps trust records opt-in and their API outside OLM ownership and resolution.
 func TestRegistrationPackaging(t *testing.T) {
-	for _, overlay := range []string{"config/default", "config/samples", "config/manifests/bases", "config/manifests/prod"} {
+	for _, overlay := range []string{defaultOverlay, "config/samples", "config/manifests/bases", "config/manifests/prod"} {
 		t.Run(overlay, func(t *testing.T) {
 			cmd := exec.Command("go", "tool", "-modfile=tools/go.mod", "kustomize", "build", overlay)
-			cmd.Dir = "../.."
+			cmd.Dir = repositoryRoot
 			data, err := cmd.Output()
 			if err != nil {
 				t.Fatalf("render %s: %v", overlay, err)
 			}
-			includeBootstrap := overlay == "config/default"
+			includeBootstrap := overlay == defaultOverlay
 			var crdFound, adminRoleFound bool
 			decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewReader(data), 4096)
 			for {

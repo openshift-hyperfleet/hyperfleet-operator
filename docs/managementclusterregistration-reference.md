@@ -132,7 +132,23 @@ explicitly alongside releases; do not delete the CRD during a routine uninstall,
 because deletion destroys all registrations. Do not publish a separate OLM
 provider that owns this CRD: that would reintroduce automatic RBAC aggregation.
 
-The packaging tests check manifest output, not a live OLM installation. Live
+### Manifest-based uninstall
+
+`make install` and `make deploy` include the registration CRD. Routine
+`make uninstall` and `make undeploy` use dedicated deletion overlays that exclude
+it, retaining all registrations. `make undeploy` still removes the unbound
+administrator role installed by `make deploy`; reapply it before administering
+the retained records. Other operator resources, including the HyperFleetConfig
+CRD, retain their existing removal behavior.
+
+Run removal targets from the same release checkout used for installation. Both
+broker variants have the same resource identities, so they share the deletion
+overlay. Do not use `kubectl delete -f dist/install.yaml` or delete
+`config/default`/`config/crd` directly: those installation inputs still include
+the registration CRD and deleting it permanently destroys its records.
+
+The packaging tests check manifest output and deletion inputs, not live
+record retention or an OLM installation. Live
 OLM acceptance must also confirm that no other operator owns the registration
 API and that generic cluster-bound `admin`/`edit` users cannot create records.
 
