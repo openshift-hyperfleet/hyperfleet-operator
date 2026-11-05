@@ -24,7 +24,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"strconv"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -55,14 +54,16 @@ func TestRemovalTargetsPreserveRegistration(t *testing.T) {
 			dir := t.TempDir()
 			capture := filepath.Join(dir, "deletion.yaml")
 			t.Setenv("REGISTRATION_TEST_CAPTURE", capture)
-			stub := filepath.Join(dir, "kubectl.sh")
+			// Shell metacharacters must remain literal in the stub path.
+			stub := filepath.Join(dir, "kubectl $HOME `false` stub.sh")
+			t.Setenv("REGISTRATION_TEST_STUB", stub)
 			// Refuse file-based deletion so dist/install.yaml can never bypass the retention overlay.
 			script := "set -eu\n[ \"$1\" = delete ]\n[ \"$3\" = -f ]\n[ \"$4\" = - ]\ncat > \"$REGISTRATION_TEST_CAPTURE\"\n"
 			if err := os.WriteFile(stub, []byte(script), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			// Skip regeneration: this test verifies committed artifacts and never contacts Kubernetes.
-			cmd = exec.Command("make", "-o", "manifests", tc.target, "KUBECTL=sh "+strconv.Quote(stub))
+			cmd = exec.Command("make", "-o", "manifests", tc.target, `KUBECTL=sh "$$REGISTRATION_TEST_STUB"`)
 			cmd.Dir = repositoryRoot
 			if output, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("%s: %v\n%s", tc.target, err, output)
