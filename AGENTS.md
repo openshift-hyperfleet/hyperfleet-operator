@@ -2,9 +2,10 @@
 
 This Go module packages and operates HyperFleet through OLM using
 controller-runtime. Its public API is the cluster-scoped singleton
-`HyperFleetConfig/cluster`; operand workloads are operator-owned implementation
-details. Use this file as the canonical repository guidance. `CLAUDE.md` only
-imports it for Claude Code compatibility.
+`HyperFleetConfig/cluster`; Hub-owned `ManagementClusterRegistration` records
+declare remote Applier identity-to-partition bindings. Operand workloads are
+operator-owned implementation details. Use this file as the canonical repository
+guidance. `CLAUDE.md` only imports it for Claude Code compatibility.
 
 ## Before changing code
 
@@ -12,6 +13,8 @@ imports it for Claude Code compatibility.
   prerequisites, and the local workflow.
 - Read [the CR reference](docs/hyperfleetconfig-reference.md) before changing
   `api/v1alpha1`, validation, defaults, Secret contracts, or status vocabulary.
+- Read [the registration reference](docs/managementclusterregistration-reference.md)
+  before changing remote Applier binding fields or administrative RBAC.
 - Read [the component pattern](docs/component-pattern.md) before adding an
   operand; verify its descriptions against the current `internal/bundle` and
   controller code rather than copying an older example blindly.

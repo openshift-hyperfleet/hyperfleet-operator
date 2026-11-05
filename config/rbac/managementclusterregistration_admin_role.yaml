@@ -1,0 +1,22 @@
+# Explicitly delegated by a Hub cluster administrator. Never aggregate this
+# role into generic admin/edit roles or bind it to management-cluster identities.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: hyperfleet-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: managementclusterregistration-admin-role
+rules:
+- apiGroups:
+  - hyperfleet.redhat.com
+  resources:
+  - managementclusterregistrations
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch

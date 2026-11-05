@@ -628,6 +628,9 @@ var _ = Describe("Manager", Ordered, func() {
 
 		})
 
+		It("restricts management-cluster registration to explicitly delegated Hub administrators",
+			checkRegistrationAdministration)
+
 		// +kubebuilder:scaffold:e2e-webhooks-checks
 
 		// TODO: Customize the e2e test suite with scenarios specific to your project.

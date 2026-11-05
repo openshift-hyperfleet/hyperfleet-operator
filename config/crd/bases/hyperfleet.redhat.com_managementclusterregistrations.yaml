@@ -1,0 +1,110 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: managementclusterregistrations.hyperfleet.redhat.com
+spec:
+  group: hyperfleet.redhat.com
+  names:
+    kind: ManagementClusterRegistration
+    listKind: ManagementClusterRegistrationList
+    plural: managementclusterregistrations
+    singular: managementclusterregistration
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.partition
+      name: Partition
+      type: string
+    - jsonPath: .spec.issuerURL
+      name: Issuer
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ManagementClusterRegistration is a Hub-administrator-owned registration of a
+          remote Applier identity and its authorized Desire Store partition. Management
+          clusters must never be granted permission to create or modify these records.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              ManagementClusterRegistrationSpec binds one remote Applier identity to one
+              Desire Store partition. All fields are required and mutable. Values are
+              matched exactly; admission does not normalize issuer URLs or identities.
+            properties:
+              audience:
+                description: audience is the exact audience required in the management-cluster
+                  token.
+                maxLength: 253
+                minLength: 1
+                pattern: ^[^[:space:][:cntrl:]]+$
+                type: string
+              issuerURL:
+                description: |-
+                  issuerURL is the exact OIDC issuer URL of the management cluster. HTTPS
+                  is required; user information, query strings and fragments are forbidden.
+                  Private hosts are allowed: issuer publication uses an approved private path.
+                maxLength: 2048
+                minLength: 1
+                pattern: ^https://[^/?#@[:space:]]+(/[^?#[:space:]]*)?$
+                type: string
+                x-kubernetes-validations:
+                - message: issuerURL must be a valid HTTPS issuer URL
+                  rule: isURL(self) && url(self).getScheme() == 'https' && url(self).getHostname()
+                    != ''
+              partition:
+                description: |-
+                  partition is the only Desire Store partition authorized for this identity.
+                  It is a DNS label because it also selects the per-partition gateway host.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                type: string
+              subject:
+                description: |-
+                  subject is the exact Kubernetes service-account subject accepted for the
+                  remote Applier, not a wildcard or a group of service accounts.
+                maxLength: 339
+                minLength: 1
+                pattern: ^system:serviceaccount:[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?:[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*$
+                type: string
+                x-kubernetes-validations:
+                - message: subject must contain a service-account name of at most
+                    253 characters
+                  rule: self.split(':').size() == 4 && self.split(':')[3].size() <=
+                    253
+            required:
+            - audience
+            - issuerURL
+            - partition
+            - subject
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources: {}

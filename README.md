@@ -3,7 +3,8 @@
 The HyperFleet Operator packages and operates HyperFleet through OLM. Its
 partner-facing API is a single cluster-scoped `HyperFleetConfig` custom
 resource; the workloads and supporting objects produced from that resource are
-operator-owned implementation details.
+operator-owned implementation details. Hub administrators also manage remote
+Applier bindings through cluster-scoped `ManagementClusterRegistration` records.
 
 ## Getting Started
 
@@ -27,6 +28,8 @@ operator-owned implementation details.
   implementation limits.
 - [Component pattern](docs/component-pattern.md): the contract and checklist for
   adding a shared or bundle-specific component.
+- [`ManagementClusterRegistration` reference](docs/managementclusterregistration-reference.md):
+  remote Applier binding fields, validation, administrative RBAC and current limitations.
 
 ### Installing and operating the operator
 

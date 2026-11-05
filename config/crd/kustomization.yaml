@@ -3,6 +3,7 @@
 # It should be run by config/default
 resources:
 - bases/hyperfleet.redhat.com_hyperfleetconfigs.yaml
+- bases/hyperfleet.redhat.com_managementclusterregistrations.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:
