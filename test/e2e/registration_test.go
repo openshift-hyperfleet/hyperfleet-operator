@@ -33,6 +33,7 @@ func checkRegistrationAdministration() {
 		resource    = "managementclusterregistrations.hyperfleet.redhat.com"
 		adminUser   = "registration-e2e-admin"
 		editUser    = "registration-e2e-editor"
+		viewUser    = "registration-e2e-viewer"
 		roleName    = "hyperfleet-operator-managementclusterregistration-admin-role"
 		createVerb  = "create"
 		asFlag      = "--as"
@@ -45,6 +46,7 @@ func checkRegistrationAdministration() {
 		{"registration-e2e-admin", roleName, adminUser},
 		{"registration-e2e-editor", "edit", editUser},
 		{"registration-e2e-generic-admin", "admin", editUser},
+		{"registration-e2e-viewer", "view", viewUser},
 	} {
 		_, err := utils.Run(exec.Command("kubectl", createVerb, "clusterrolebinding", binding.name,
 			"--clusterrole", binding.role, "--user", binding.user))
@@ -56,14 +58,14 @@ func checkRegistrationAdministration() {
 		})
 	}
 
-	By("rejecting remote self-registration and generic admin/edit delegation")
-	for _, subject := range []string{editUser, "system:serviceaccount:management-cluster:applier"} {
+	By("rejecting remote self-registration and generic admin/edit/view access")
+	for _, subject := range []string{editUser, viewUser, "system:serviceaccount:management-cluster:applier"} {
 		identityArgs := []string{asFlag, subject, asGroupFlag, authenticatedGroup}
 		if strings.HasPrefix(subject, "system:serviceaccount:") {
 			identityArgs = append(identityArgs, asGroupFlag, serviceAccountsGroup,
 				asGroupFlag, serviceAccountsGroup+":"+strings.Split(subject, ":")[2])
 		}
-		for _, verb := range []string{createVerb, updateVerb, patchVerb, "delete"} {
+		for _, verb := range []string{getVerb, listVerb, watchVerb, createVerb, updateVerb, patchVerb, "delete"} {
 			args := append([]string{authCommand, canICommand, verb, resource}, identityArgs...)
 			Expect(managerCanIWithArgs(args, "")).To(BeFalse())
 		}

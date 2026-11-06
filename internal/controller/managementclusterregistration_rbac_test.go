@@ -44,6 +44,7 @@ var _ = Describe("ManagementClusterRegistration administrative RBAC", func() {
 		Expect(role.AggregationRule).To(BeNil())
 		Expect(role.Labels).NotTo(HaveKey("rbac.authorization.k8s.io/aggregate-to-admin"))
 		Expect(role.Labels).NotTo(HaveKey("rbac.authorization.k8s.io/aggregate-to-edit"))
+		Expect(role.Labels).NotTo(HaveKey("rbac.authorization.k8s.io/aggregate-to-view"))
 		Expect(k8sClient.Create(ctx, role)).To(Succeed())
 		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, role)).To(Succeed()) })
 

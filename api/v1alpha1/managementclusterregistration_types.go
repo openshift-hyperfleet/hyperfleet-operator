@@ -36,7 +36,7 @@ type ManagementClusterRegistrationSpec struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=2048
-	// +kubebuilder:validation:Pattern=`^https://[^/?#@[:space:]]+(/[^?#[:space:]]*)?$`
+	// +kubebuilder:validation:Pattern=`^https://[^/?#@\x00-\x20\x7F]+(/[^?#\x00-\x20\x7F]*)?$`
 	// +kubebuilder:validation:XValidation:rule="isURL(self) && url(self).getScheme() == 'https' && url(self).getHostname() != ''",message="issuerURL must be a valid HTTPS issuer URL"
 	IssuerURL string `json:"issuerURL"`
 
@@ -55,7 +55,7 @@ type ManagementClusterRegistrationSpec struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
-	// +kubebuilder:validation:Pattern=`^[^[:space:][:cntrl:]]+$`
+	// +kubebuilder:validation:Pattern=`^[^\x00-\x20\x7F]+$`
 	Audience string `json:"audience"`
 
 	// partition is the only Desire Store partition authorized for this identity.

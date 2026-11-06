@@ -28,9 +28,9 @@ values; in particular, it does not remove a trailing slash from an issuer URL.
 
 | Field | Validation |
 |---|---|
-| `spec.issuerURL` | HTTPS URL with a host, 1–2048 characters; no credentials, whitespace, query or fragment. A path, port, trailing slash and private hostname are allowed. |
+| `spec.issuerURL` | HTTPS URL with a host, 1–2048 characters; no credentials, ASCII whitespace/control characters, query or fragment. A path, port, trailing slash and private hostname are allowed. |
 | `spec.subject` | Exact `system:serviceaccount:<namespace>:<name>` subject. Namespace is a DNS label of at most 63 characters; service-account name is a DNS subdomain of at most 253 characters. Wildcards and groups are not accepted. |
-| `spec.audience` | 1–253 characters, without whitespace or ASCII control characters. A URI audience is permitted. |
+| `spec.audience` | 1–253 characters, without ASCII whitespace or control characters (U+0000–U+0020 and U+007F). A URI audience is permitted. |
 | `spec.partition` | Lowercase DNS label, 1–63 characters, because the partition also selects the gateway hostname. No dots, wildcards or path separators. |
 
 The issuer must be reachable by the gateway over the approved network path.
@@ -147,10 +147,14 @@ overlay. Do not use `kubectl delete -f dist/install.yaml` or delete
 `config/default`/`config/crd` directly: those installation inputs still include
 the registration CRD and deleting it permanently destroys its records.
 
-The packaging tests check manifest output and deletion inputs, not live
-record retention or an OLM installation. Live
-OLM acceptance must also confirm that no other operator owns the registration
-API and that generic cluster-bound `admin`/`edit` users cannot create records.
+The packaging tests check manifest output, bootstrap command ordering/failure
+handling and deletion inputs, not live record retention or an OLM installation.
+Both removal overlays use the shared `config/components/preserve-registration`
+Kustomize component. Schema pattern tests exercise RE2 and, when Node.js is
+available, ECMA-262 against the generated CRD; the JavaScript subtest is skipped
+without Node.js. Live OLM acceptance must also confirm that no other operator
+owns the registration API and that generic cluster-bound `admin`/`edit`/`view`
+users cannot read or modify records.
 
 ## Implementation boundary
 
