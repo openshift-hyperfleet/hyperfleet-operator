@@ -36,6 +36,12 @@ values; in particular, it does not remove a trailing slash from an issuer URL.
 The issuer must be reachable by the gateway over the approved network path.
 Schema validation checks syntax, not reachability, discovery or signing keys.
 
+The complete subject is limited to 339 characters: the `system:serviceaccount:`
+prefix, a namespace of at most 63 characters, a colon and an account name of at
+most 253 characters. Account-name validation follows Kubernetes
+`ValidateServiceAccountName`: the 253-character limit applies to the complete
+name, without a separate 63-character cap on dot-separated segments.
+
 ## Example
 
 ```yaml

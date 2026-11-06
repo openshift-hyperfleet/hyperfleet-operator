@@ -87,9 +87,11 @@ spec:
                 description: |-
                   subject is the exact Kubernetes service-account subject accepted for the
                   remote Applier, not a wildcard or a group of service accounts.
+                  The full limit is the prefix plus a 63-character namespace, a separator,
+                  and a 253-character Kubernetes service-account name.
                 maxLength: 339
                 minLength: 1
-                pattern: ^system:serviceaccount:[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?:[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*$
+                pattern: ^system:serviceaccount:[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?:[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                 type: string
                 x-kubernetes-validations:
                 - message: subject must contain a service-account name of at most

@@ -23,6 +23,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
+	apivalidation "k8s.io/apimachinery/pkg/api/validation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -92,6 +93,30 @@ var _ = Describe("ManagementClusterRegistration CRD validation", func() {
 				strings.Repeat("c", 63)+"."+strings.Repeat("d", 61)),
 	)
 
+	DescribeTable("matches Kubernetes service-account name validation", func(name string) {
+		obj := validManagementClusterRegistration()
+		obj.Spec.Subject = "system:serviceaccount:" + strings.Repeat("n", 63) + ":" + name
+		err := k8sClient.Create(ctx, obj)
+		if len(apivalidation.ValidateServiceAccountName(name, false)) != 0 {
+			Expect(errors.IsInvalid(err)).To(BeTrue(), "expected Invalid, got %v", err)
+			return
+		}
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, obj)).To(Succeed()) })
+		stored := &hyperfleetv1alpha1.ManagementClusterRegistration{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(obj), stored)).To(Succeed())
+		Expect(stored.Spec.Subject).To(Equal(obj.Spec.Subject))
+	},
+		Entry("64-character undotted name", strings.Repeat("a", 64)),
+		Entry("253-character undotted name", strings.Repeat("a", 253)),
+		Entry("long dotted segment", strings.Repeat("a", 64)+".applier"),
+		Entry("254-character undotted name", strings.Repeat("a", 254)),
+		Entry("leading dot", ".applier"),
+		Entry("trailing dot", "applier."),
+		Entry("leading hyphen", "-applier"),
+		Entry("trailing hyphen", "applier-"),
+	)
+
 	DescribeTable("rejects invalid binding fields on create and update", func(field, value string) {
 		invalid := registrationWithField(field, value)
 		err := k8sClient.Create(ctx, invalid)
@@ -128,6 +153,8 @@ var _ = Describe("ManagementClusterRegistration CRD validation", func() {
 		Entry("empty account label", "subject", "system:serviceaccount:hyperfleet:applier..other"),
 		Entry("oversized account name", "subject",
 			"system:serviceaccount:h:"+strings.Repeat("abc.", 63)+"ab"),
+		Entry("oversized undotted account name", "subject",
+			"system:serviceaccount:h:"+strings.Repeat("a", 254)),
 		Entry("empty audience", registrationAudienceField, ""),
 		Entry("whitespace audience", registrationAudienceField, "desire store"),
 		Entry("control character audience", registrationAudienceField, "desire\nstore"),

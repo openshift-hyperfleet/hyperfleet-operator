@@ -42,11 +42,13 @@ type ManagementClusterRegistrationSpec struct {
 
 	// subject is the exact Kubernetes service-account subject accepted for the
 	// remote Applier, not a wildcard or a group of service accounts.
+	// The full limit is the prefix plus a 63-character namespace, a separator,
+	// and a 253-character Kubernetes service-account name.
 	//
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=339
-	// +kubebuilder:validation:Pattern=`^system:serviceaccount:[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?:[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*$`
+	// +kubebuilder:validation:Pattern=`^system:serviceaccount:[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?:[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
 	// +kubebuilder:validation:XValidation:rule="self.split(':').size() == 4 && self.split(':')[3].size() <= 253",message="subject must contain a service-account name of at most 253 characters"
 	Subject string `json:"subject"`
 
