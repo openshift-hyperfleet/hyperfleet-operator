@@ -59,7 +59,8 @@ spec:
       version: v1alpha1
   description: |-
     Delivers HyperFleet as a standard Kubernetes operator, installed and
-    managed through OLM. It exposes a single cluster-scoped CR: HyperFleetConfig.
+    managed through OLM. HyperFleetConfig configures the installation;
+    ManagementClusterRegistration records Hub-administered remote Applier bindings.
   displayName: HyperFleet Operator
   install:
     spec:

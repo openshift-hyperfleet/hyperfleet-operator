@@ -1,0 +1,9 @@
+apiVersion: hyperfleet.redhat.com/v1alpha1
+kind: ManagementClusterRegistration
+metadata:
+  name: mc-01
+spec:
+  issuerURL: https://issuer.mc-01.example.com
+  subject: system:serviceaccount:hyperfleet:applier
+  audience: hyperfleet-desire-store
+  partition: mc-01

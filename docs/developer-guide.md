@@ -51,7 +51,7 @@ devcontainer as a supported build environment for this branch.
 
 | Path | Responsibility |
 |---|---|
-| `api/v1alpha1` | `HyperFleetConfig` Go API, validation markers, defaults, status vocabulary, and generated deep-copy code. |
+| `api/v1alpha1` | `HyperFleetConfig` and `ManagementClusterRegistration` APIs, validation markers, defaults, status vocabulary, and generated deep-copy code. |
 | `cmd` | Manager startup, scheme registration, flags, related-image input, and controller wiring. |
 | `internal/controller` | Reconciliation, watches, Secret resolution, OIDC discovery, server-side apply orchestration, rollout hashing, status rollup, and metrics. |
 | `internal/bundle` | Resolves `spec.bundle` into an ordered set of components. |
@@ -61,7 +61,7 @@ devcontainer as a supported build environment for this branch.
 | `config/rbac` | Generated RBAC plus role aggregation and namespace-scoped operand access. |
 | `config/manager` | Base manager Deployment and image substitutions. |
 | `config/manifests` | OLM CSV bases and development/production overlays. |
-| `config/samples` | Example `HyperFleetConfig`. |
+| `config/samples` | Example installation configuration and management-cluster registration. |
 | `test/e2e` | Kind-based end-to-end setup and Ginkgo suite. |
 | `validators` | Bundle validation, including digest-pinned related images. |
 | `hack` | Build, validation, and disconnected-mirroring helpers. |

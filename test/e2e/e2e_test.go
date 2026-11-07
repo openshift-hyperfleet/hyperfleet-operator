@@ -52,6 +52,8 @@ const (
 
 const (
 	getVerb     = "get"
+	listVerb    = "list"
+	watchVerb   = "watch"
 	asGroupFlag = "--as-group"
 )
 
@@ -531,7 +533,7 @@ var _ = Describe("Manager", Ordered, func() {
 				"roles.rbac.authorization.k8s.io",
 				"rolebindings.rbac.authorization.k8s.io",
 			}
-			operandVerbs := []string{getVerb, "list", "watch", "create", "update", "patch"}
+			operandVerbs := []string{getVerb, listVerb, watchVerb, "create", "update", "patch"}
 			for _, resource := range operandResources {
 				for _, verb := range operandVerbs {
 					Expect(managerCanI(verb, resource, namespace)).To(BeTrue(),
@@ -550,7 +552,7 @@ var _ = Describe("Manager", Ordered, func() {
 			}
 
 			By("verifying cluster-scoped HyperFleetConfig access remains available")
-			for _, verb := range []string{"get", "list", "watch", "create", "update", "patch", "delete"} {
+			for _, verb := range []string{getVerb, listVerb, watchVerb, "create", "update", "patch", "delete"} {
 				Expect(managerCanI(verb, "hyperfleetconfigs.hyperfleet.redhat.com", "")).To(BeTrue(),
 					"manager should retain cluster-scoped HyperFleetConfig %s access", verb)
 			}
@@ -627,6 +629,9 @@ var _ = Describe("Manager", Ordered, func() {
 			waitForMigratedAPIPod(apiPodName)
 
 		})
+
+		It("restricts management-cluster registration to explicitly delegated Hub administrators",
+			checkRegistrationAdministration)
 
 		// +kubebuilder:scaffold:e2e-webhooks-checks
 

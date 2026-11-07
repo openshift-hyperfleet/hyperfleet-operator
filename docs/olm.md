@@ -4,7 +4,7 @@
 
 Konflux uses a cascading build-nudge chain to keep operator, bundle, and catalog images in sync. Each stage triggers the next automatically:
 
-```
+```text
 operator image ──nudge──▶ bundle image ──nudge──▶ catalog image
 ```
 
@@ -65,6 +65,21 @@ Why the gate: the team rule is that a component nudges the bundle only if the op
 - Access to a Kubernetes v1.27.0+ cluster.
 
 ### Prerequisite steps
+
+Before creating a Subscription or running `operator-sdk run bundle`, a cluster
+administrator must install the externally managed registration CRD and its
+unbound administrative role from the matching release:
+
+```bash
+make install-registration-api
+```
+
+The CSV neither owns nor requires this API: ownership would aggregate registration
+permissions into generic roles, while a required entry would create an OLM
+provider dependency that the external CRD cannot satisfy. OLM does not enforce
+the bootstrap prerequisite. See
+[registration bootstrap and lifecycle](managementclusterregistration-reference.md#olm-bootstrap-and-lifecycle)
+for explicit delegation, upgrades and uninstall behavior.
 
 For local development and installation, set your Quay username to automatically configure image paths:
 
