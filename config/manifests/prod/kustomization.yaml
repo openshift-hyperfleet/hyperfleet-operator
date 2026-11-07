@@ -6,7 +6,7 @@ patches:
       path: /spec/template/spec/containers/0/env/1
       value:
         name: RELATED_IMAGE_HYPERFLEET_API
-        value: quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-api@sha256:5665cc690feb07b1cf9f13bff10a688cde5ca58d6bffacd72100431eeabf016c
+        value: quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-api@sha256:a45816c80c16b23c4e3bec6d44b9f25ce12fb4e9193a4dc6653df88e4d542bce
     - op: replace
       path: /spec/template/spec/containers/0/env/2
       value:
