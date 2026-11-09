@@ -11,7 +11,7 @@ patches:
       path: /spec/template/spec/containers/0/env/2
       value:
         name: RELATED_IMAGE_HYPERFLEET_SENTINEL
-        value: quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-sentinel@sha256:c2f18cc4f64bcc4d689e789cfa713e3e7ae16de373971882298e44364447cb41
+        value: quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-sentinel@sha256:55acea5499dccfa176a83bedd13558d3dd35bb2c43ecce0055272c161b8e6b5f
     - op: replace
       path: /spec/template/spec/containers/0/env/3
       value:
