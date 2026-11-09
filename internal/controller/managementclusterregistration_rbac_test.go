@@ -41,6 +41,7 @@ var _ = Describe("ManagementClusterRegistration administrative RBAC", func() {
 		Expect(err).NotTo(HaveOccurred())
 		role := &rbacv1.ClusterRole{}
 		Expect(yaml.Unmarshal(data, role)).To(Succeed())
+		// Only the narrow role is checked here; OLM separately aggregates owned-API access.
 		Expect(role.AggregationRule).To(BeNil())
 		Expect(role.Labels).NotTo(HaveKey("rbac.authorization.k8s.io/aggregate-to-admin"))
 		Expect(role.Labels).NotTo(HaveKey("rbac.authorization.k8s.io/aggregate-to-edit"))

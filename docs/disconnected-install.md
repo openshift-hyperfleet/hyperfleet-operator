@@ -23,11 +23,12 @@ Requirements:
   disconnected operation. Platform mirroring is a separate prerequisite.
 - Registry authentication and CA trust configured for the import host and
   cluster. Configuring the host alone does not configure cluster image pulls.
-- The matching release's registration CRD and administrative-role manifests,
-  transferred separately from the catalog. Follow the
-  [registration bootstrap instructions](managementclusterregistration-reference.md#olm-bootstrap-and-lifecycle)
-  before creating the Subscription. The CSV neither owns nor requires this API,
-  so OLM does not enforce bootstrap; the catalog mirror alone cannot install it.
+
+The release bundle includes the owned `ManagementClusterRegistration` CRD and
+the unbound registration-administrator role. They follow the same catalog mirror
+and OLM installation/upgrade path as `HyperFleetConfig`; no separate manifest
+transfer or registration bootstrap is required. See
+[registration installation and lifecycle](managementclusterregistration-reference.md#olm-installation-and-lifecycle).
 
 Use the same oc-mirror version for export and import. OpenShift 4.17 documents
 oc-mirror v2 as Technology Preview; the local

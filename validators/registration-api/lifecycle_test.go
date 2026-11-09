@@ -24,67 +24,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/yaml"
 )
-
-// TestRegistrationBootstrap pins ordering and stops before delegation when CRD setup fails.
-func TestRegistrationBootstrap(t *testing.T) {
-	steps := []string{
-		"apply -f config/crd/bases/hyperfleet.redhat.com_managementclusterregistrations.yaml",
-		"wait --for=condition=Established crd/" + registrationCRDName + " --timeout=60s",
-		"apply -f config/rbac/managementclusterregistration_admin_role.yaml",
-	}
-	for _, tc := range []struct {
-		name   string
-		failAt int
-	}{
-		{"success", 0},
-		{"CRD apply failure", 1},
-		{"establishment failure", 2},
-		{"role apply failure", 3},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			capture := filepath.Join(dir, "bootstrap.log")
-			stub := filepath.Join(dir, "kubectl $HOME `false` stub.sh")
-			t.Setenv("REGISTRATION_TEST_CAPTURE", capture)
-			t.Setenv("REGISTRATION_TEST_STUB", stub)
-			failCommand := ""
-			count := len(steps)
-			if tc.failAt != 0 {
-				failCommand = steps[tc.failAt-1]
-				count = tc.failAt
-			}
-			t.Setenv("REGISTRATION_TEST_FAIL_COMMAND", failCommand)
-			script := `set -eu
-printf '%s\n' "$*" >> "$REGISTRATION_TEST_CAPTURE"
-[ "$*" != "$REGISTRATION_TEST_FAIL_COMMAND" ]
-`
-			if err := os.WriteFile(stub, []byte(script), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			// Regeneration is forbidden: bootstrap must consume the release files on disk.
-			cmd := exec.Command("make", "install-registration-api", "CONTROLLER_GEN=false",
-				`KUBECTL=sh "$$REGISTRATION_TEST_STUB"`)
-			cmd.Dir = repositoryRoot
-			output, err := cmd.CombinedOutput()
-			if (err != nil) != (tc.failAt != 0) {
-				t.Fatalf("unexpected bootstrap result: %v\n%s", err, output)
-			}
-			data, err := os.ReadFile(capture)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got, want := string(data), strings.Join(steps[:count], "\n")+"\n"; got != want {
-				t.Errorf("bootstrap commands:\ngot %q\nwant %q", got, want)
-			}
-		})
-	}
-}
 
 // TestRemovalTargetsPreserveRegistration checks the actual kubectl deletion inputs without a cluster.
 func TestRemovalTargetsPreserveRegistration(t *testing.T) {

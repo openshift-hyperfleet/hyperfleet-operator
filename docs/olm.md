@@ -66,20 +66,15 @@ Why the gate: the team rule is that a component nudges the bundle only if the op
 
 ### Prerequisite steps
 
-Before creating a Subscription or running `operator-sdk run bundle`, a cluster
-administrator must install the externally managed registration CRD and its
-unbound administrative role from the matching release:
-
-```bash
-make install-registration-api
-```
-
-The CSV neither owns nor requires this API: ownership would aggregate registration
-permissions into generic roles, while a required entry would create an OLM
-provider dependency that the external CRD cannot satisfy. OLM does not enforce
-the bootstrap prerequisite. See
-[registration bootstrap and lifecycle](managementclusterregistration-reference.md#olm-bootstrap-and-lifecycle)
-for explicit delegation, upgrades and uninstall behavior.
+The bundle includes both `HyperFleetConfig` and `ManagementClusterRegistration`
+as owned APIs. OLM installs and upgrades their CRDs with the operator; no separate
+registration bootstrap is required. The bundle also includes an unbound,
+registration-only administrator role. OLM separately aggregates owned-API access
+into generic `admin`, `edit` and `view` roles. Cluster-wide `admin`/`edit`
+principals are trusted registration administrators; namespace-only RoleBindings
+do not grant access to this cluster-scoped API. See
+[registration installation and lifecycle](managementclusterregistration-reference.md#olm-installation-and-lifecycle)
+for delegation and retention details.
 
 For local development and installation, set your Quay username to automatically configure image paths:
 

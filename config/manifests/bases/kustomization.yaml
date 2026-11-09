@@ -5,27 +5,6 @@ resources:
 - ../../default
 - ../../samples
 - ../../scorecard
-# OLM automatically aggregates permissions for owned CRDs into admin/edit/view.
-# The registration trust API is bootstrapped externally, never shipped as owned.
-patches:
-- target:
-    kind: CustomResourceDefinition
-    name: managementclusterregistrations.hyperfleet.redhat.com
-  patch: |-
-    $patch: delete
-    apiVersion: apiextensions.k8s.io/v1
-    kind: CustomResourceDefinition
-    metadata:
-      name: managementclusterregistrations.hyperfleet.redhat.com
-- target:
-    kind: ClusterRole
-    name: hyperfleet-operator-managementclusterregistration-admin-role
-  patch: |-
-    $patch: delete
-    apiVersion: rbac.authorization.k8s.io/v1
-    kind: ClusterRole
-    metadata:
-      name: hyperfleet-operator-managementclusterregistration-admin-role
 # The Prometheus ServiceMonitor is deliberately NOT included in the bundle. OLM
 # applies a bundle's arbitrary manifests but does not install the CRDs they need,
 # so bundling the ServiceMonitor would fail the InstallPlan — and block the whole

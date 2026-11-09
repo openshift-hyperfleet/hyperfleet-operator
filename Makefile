@@ -273,12 +273,6 @@ endif
 install: manifests ## Install CRDs into the K8s cluster specified in ~/.kube/config.
 	@$(KUSTOMIZE)  build config/crd | $(KUBECTL) apply -f -
 
-.PHONY: install-registration-api
-install-registration-api: ## Bootstrap the externally managed registration CRD and unbound administrator role before OLM installation.
-	$(KUBECTL) apply -f config/crd/bases/hyperfleet.redhat.com_managementclusterregistrations.yaml
-	$(KUBECTL) wait --for=condition=Established crd/managementclusterregistrations.hyperfleet.redhat.com --timeout=60s
-	$(KUBECTL) apply -f config/rbac/managementclusterregistration_admin_role.yaml
-
 .PHONY: uninstall
 uninstall: manifests ## Uninstall operator CRDs, preserving registration records. Call with ignore-not-found=true to ignore missing resources.
 	@$(KUSTOMIZE) build config/uninstall | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -

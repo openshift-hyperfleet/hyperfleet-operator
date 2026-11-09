@@ -1,5 +1,6 @@
-# Explicitly delegated by a Hub cluster administrator. Never aggregate this
-# role into generic admin/edit roles or bind it to management-cluster identities.
+# Optional narrow delegation by a Hub cluster administrator. This role itself
+# does not aggregate; OLM separately aggregates access for the owned CRD.
+# Never bind registration write access to management-cluster identities.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:

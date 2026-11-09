@@ -69,13 +69,16 @@ registration records. It grants no access to Secrets, AuthConfigs, role
 bindings or other HyperFleet resources. The operator's manager service account
 does not need registration write access for this API-only implementation.
 
-The role has no automatic binding and is not aggregated into Kubernetes'
-generic `admin`, `edit` or `view` roles. A cluster administrator must explicitly
-delegate it to trusted Hub administrators with a ClusterRoleBinding. A
-namespace RoleBinding does not grant access to this cluster-scoped resource.
+The role has no automatic binding or aggregation labels. A cluster administrator
+can explicitly delegate it to trusted Hub administrators with a
+ClusterRoleBinding for registration-only access. In an OLM installation, OLM
+also creates its own roles aggregated into generic `admin`, `edit` and `view`:
+cluster-wide `admin`/`edit` principals are trusted registration administrators,
+and cluster-wide `view` principals can read records. A namespace RoleBinding
+does not grant access to this cluster-scoped resource.
 
-For a manifest-based installation (`make deploy`), Kustomize installs the role
-as `hyperfleet-operator-managementclusterregistration-admin-role`:
+Both the manifest installation (`make deploy`) and OLM bundle include the
+unbound role as `hyperfleet-operator-managementclusterregistration-admin-role`:
 
 ```bash
 kubectl create clusterrolebinding hyperfleet-registration-admins \
@@ -88,55 +91,26 @@ wildcard permissions still have access. This role is not an admission deny
 policy and cannot override another role's grants. Audit other role bindings
 when onboarding management clusters; never bind this role to them.
 
-### OLM bootstrap and lifecycle
+### OLM installation and lifecycle
 
-OLM automatically creates roles aggregated into generic `admin`, `edit` and
-`view` for APIs listed as owned in a CSV. To avoid that implicit delegation,
-the registration CRD is intentionally absent from both the owned and required
-APIs in the HyperFleet CSV. A required API creates a provider dependency in
-OLM's resolver; a manually installed, unowned CRD does not satisfy that dependency.
-The bundle excludes the CRD, administrator role and example
-registration. An administrator installs and maintains the registration API
-separately, before creating the Subscription or running `operator-sdk run bundle`:
+The CSV owns `ManagementClusterRegistration`, just like `HyperFleetConfig`.
+The bundle carries the registration CRD and unbound administrator role; OLM
+installs them through the normal InstallPlan. CRD changes are delivered in
+release bundles and upgraded through the Subscription, without a separate
+Make command or external manifest transfer. Disconnected installations mirror
+the same bundle through the catalog.
 
-```bash
-make install-registration-api
-```
+OLM's generic-role aggregation is intentional. Do not grant cluster-wide
+`admin`/`edit` or other registration-write permissions to remote management-cluster
+identities. The dedicated role remains useful when registration-only access is
+preferable to a generic administrative role. Manifest-only installations do not
+run OLM and therefore do not acquire OLM-generated aggregation roles.
 
-This applies the CRD and role files on disk without regenerating them or running
-`controller-gen`. Use an unmodified checkout of the matching release; the target
-does not authenticate local files. Developers regenerate artifacts separately
-with `make manifests`.
-
-The target installs the registration CRD, waits for it to be established,
-and installs the unbound role as `managementclusterregistration-admin-role`
-(without the manifest deployment's `hyperfleet-operator-` prefix). Delegate
-this bootstrap role explicitly if needed:
-
-```bash
-kubectl create clusterrolebinding hyperfleet-registration-admins \
-  --clusterrole=managementclusterregistration-admin-role \
-  --group=hyperfleet-hub-registration-admins
-```
-
-Use the CRD and role manifests from the same release as the operator. For
-disconnected installation, transfer these two files through the approved release
-artifact channel and apply them locally; the catalog mirror does not carry them:
-
-```bash
-kubectl apply -f config/crd/bases/hyperfleet.redhat.com_managementclusterregistrations.yaml
-kubectl wait --for=condition=Established \
-  crd/managementclusterregistrations.hyperfleet.redhat.com --timeout=60s
-kubectl apply -f config/rbac/managementclusterregistration_admin_role.yaml
-```
-
-OLM does not enforce this external bootstrap: a successful operator installation
-does not prove that the registration API or role exists. Verify bootstrap
-separately before administering registration records. OLM uninstall does not
-remove this external CRD or its records. Upgrade the external CRD/RBAC
-explicitly alongside releases; do not delete the CRD during a routine uninstall,
-because deletion destroys all registrations. Do not publish a separate OLM
-provider that owns this CRD: that would reintroduce automatic RBAC aggregation.
+Routine OLM uninstall leaves CRDs and their records in place; do not delete the
+registration CRD to uninstall or upgrade the operator. Deleting the CRD destroys
+all registrations. Back up records before lifecycle operations and verify
+retention against the deployed OLM version. A bundle includes the API and role,
+not a registration instance: apply a reviewed record explicitly after installation.
 
 ### Manifest-based uninstall
 
@@ -153,14 +127,16 @@ overlay. Do not use `kubectl delete -f dist/install.yaml` or delete
 `config/default`/`config/crd` directly: those installation inputs still include
 the registration CRD and deleting it permanently destroys its records.
 
-The packaging tests check manifest output, bootstrap command ordering/failure
-handling and deletion inputs, not live record retention or an OLM installation.
+The packaging tests check the bundled CRD, owned CSV declaration, unbound role
+and deletion inputs, not live record retention or an OLM installation.
 Both removal overlays use the shared `config/components/preserve-registration`
 Kustomize component. Schema pattern tests exercise RE2 and, when Node.js is
 available, ECMA-262 against the generated CRD; the JavaScript subtest is skipped
-without Node.js. Live OLM acceptance must also confirm that no other operator
-owns the registration API and that generic cluster-bound `admin`/`edit`/`view`
-users cannot read or modify records.
+without Node.js. The Kind E2E suite tests manifest-only installation and absence
+of OLM-generated access, not the OLM path. Live OLM acceptance must confirm that
+the CRD and role install from the bundle, cluster-bound `admin`/`edit` users can
+administer records, `view` users can read but not write, remote identities
+without those grants cannot self-register, and records survive routine uninstall.
 
 ## Implementation boundary
 
@@ -170,6 +146,6 @@ Creating a record does not yet enable Desire Store access, and deleting one
 does not yet revoke an AuthConfig: rendering, replacement and removal of those
 policies belong to
 [HYPERFLEET-1831](https://redhat.atlassian.net/browse/HYPERFLEET-1831).
-Cross-record issuer uniqueness and overlapping signing-key rejection belong to
+Cross-record issuer/partition uniqueness and overlapping signing-key rejection belong to
 [HYPERFLEET-1832](https://redhat.atlassian.net/browse/HYPERFLEET-1832), not this
 CRD's single-object validation. No binding-readiness status is invented here.

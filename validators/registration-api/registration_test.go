@@ -33,7 +33,7 @@ const (
 	repositoryRoot      = "../.."
 )
 
-// TestRegistrationPackaging keeps trust records opt-in and their API outside OLM ownership and resolution.
+// TestRegistrationPackaging ships the owned API and narrow role without creating trust records.
 func TestRegistrationPackaging(t *testing.T) {
 	for _, overlay := range []string{defaultOverlay, "config/samples", "config/manifests/bases", "config/manifests/prod"} {
 		t.Run(overlay, func(t *testing.T) {
@@ -43,8 +43,9 @@ func TestRegistrationPackaging(t *testing.T) {
 			if err != nil {
 				t.Fatalf("render %s: %v", overlay, err)
 			}
-			includeBootstrap := overlay == defaultOverlay
-			var crdFound, adminRoleFound bool
+			includeAPI := overlay != "config/samples"
+			includeCSV := overlay == "config/manifests/bases" || overlay == "config/manifests/prod"
+			var crdFound, adminRoleFound, csvFound bool
 			decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewReader(data), 4096)
 			for {
 				var obj unstructured.Unstructured
@@ -60,21 +61,34 @@ func TestRegistrationPackaging(t *testing.T) {
 					adminRoleFound = adminRoleFound || obj.GetName() == "hyperfleet-operator-managementclusterregistration-admin-role"
 				case "ManagementClusterRegistration":
 					t.Error("installation must not create example registrations")
+				case "ClusterRoleBinding", "RoleBinding":
+					role, _, err := unstructured.NestedString(obj.Object, "roleRef", "name")
+					if err != nil {
+						t.Fatal(err)
+					}
+					if role == "hyperfleet-operator-managementclusterregistration-admin-role" {
+						t.Error("installation must not automatically bind the registration administrator role")
+					}
 				case "ClusterServiceVersion":
+					csvFound = true
 					checkCSV(t, obj)
 				}
 			}
-			if crdFound != includeBootstrap || adminRoleFound != includeBootstrap {
-				t.Errorf("unexpected packaging: crd=%t adminRole=%t includeBootstrap=%t",
-					crdFound, adminRoleFound, includeBootstrap)
+			if csvFound != includeCSV {
+				t.Errorf("unexpected CSV presence: got %t, want %t", csvFound, includeCSV)
+			}
+			if crdFound != includeAPI || adminRoleFound != includeAPI {
+				t.Errorf("unexpected packaging: crd=%t adminRole=%t includeAPI=%t",
+					crdFound, adminRoleFound, includeAPI)
 			}
 		})
 	}
 }
 
-// checkCSV rejects both implicit RBAC delegation and an unsatisfiable external API dependency.
+// checkCSV requires exactly one owned registration API, never an external provider dependency.
 func checkCSV(t *testing.T, obj unstructured.Unstructured) {
 	t.Helper()
+	owned := 0
 	for _, category := range []string{"owned", "required"} {
 		entries, _, err := unstructured.NestedSlice(obj.Object, "spec", "customresourcedefinitions", category)
 		if err != nil {
@@ -86,11 +100,17 @@ func checkCSV(t *testing.T, obj unstructured.Unstructured) {
 				continue
 			}
 			if category == "owned" {
-				t.Error("OLM must not own the registration CRD: ownership enables generic RBAC aggregation")
+				owned++
+				if description["kind"] != "ManagementClusterRegistration" || description["version"] != "v1alpha1" {
+					t.Error("owned registration API must match the bundled CRD kind/version")
+				}
 			}
 			if category == "required" {
-				t.Error("OLM must not require the registration CRD: external bootstrap is not a provider bundle")
+				t.Error("registration must be owned, not an external API dependency")
 			}
 		}
+	}
+	if owned != 1 {
+		t.Errorf("expected one owned registration API, got %d", owned)
 	}
 }

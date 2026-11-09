@@ -26,8 +26,8 @@ import (
 	"github.com/openshift-hyperfleet/hyperfleet-operator/test/utils"
 )
 
-// checkRegistrationAdministration exercises the installed RBAC, including
-// Kubernetes' built-in aggregated roles, rather than only the source manifest.
+// checkRegistrationAdministration exercises the manifest installation's RBAC.
+// This suite does not install OLM, whose owned-API roles grant additional access.
 func checkRegistrationAdministration() {
 	const (
 		resource    = "managementclusterregistrations.hyperfleet.redhat.com"
@@ -58,7 +58,7 @@ func checkRegistrationAdministration() {
 		})
 	}
 
-	By("rejecting remote self-registration and generic admin/edit/view access")
+	By("rejecting remote self-registration and generic roles without OLM aggregation")
 	for _, subject := range []string{editUser, viewUser, "system:serviceaccount:management-cluster:applier"} {
 		identityArgs := []string{asFlag, subject, asGroupFlag, authenticatedGroup}
 		if strings.HasPrefix(subject, "system:serviceaccount:") {
