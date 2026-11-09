@@ -100,7 +100,7 @@ setup-envtest: $(LOCALBIN) ## Download the envtest binaries (etcd, kube-apiserve
 
 .PHONY: test
 test: manifests generate fmt vet setup-envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use '$(ENVTEST_K8S_VERSION)' --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
+	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use '$(ENVTEST_K8S_VERSION)' --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v '/test/e2e$$') -coverprofile cover.out
 
 .PHONY: setup-test-e2e
 setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
@@ -124,6 +124,22 @@ test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expect
 .PHONY: cleanup-test-e2e
 cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 	@$(KIND) delete cluster --name $(KIND_CLUSTER)
+
+# Prepared-cluster OLM tests consume published artifacts. They must not invoke
+# setup-test-e2e, build a replacement manager, or install locally generated CRDs.
+# The build tag keeps live execution out of ordinary unit tests and make test.
+export KUBECONFIG UPGRADE_CATALOG UPGRADE_FROM_BUNDLE UPGRADE_TO_BUNDLE UPGRADE_CHANNEL
+export UPGRADE_SCENARIO UPGRADE_NAMESPACE UPGRADE_TIMEOUT UPGRADE_RETAIN_ON_SUCCESS OPM SKOPEO ARTIFACT_DIR
+
+.PHONY: test-e2e-upgrade
+test-e2e-upgrade: opm ## Test a published N-1 -> N OLM Classic upgrade on a prepared isolated cluster.
+	@test -n "$(ARTIFACT_DIR)" || { echo "ARTIFACT_DIR is required" >&2; exit 1; }
+	UPGRADE_CLEANUP_ONLY=false go test -tags=upgrade_e2e ./test/e2e/upgrade -run '^TestOLMUpgrade$$' -count=1 -timeout=2h -v \
+		-args -ginkgo.junit-report="$(ARTIFACT_DIR)/junit-upgrade.xml"
+
+.PHONY: cleanup-e2e-upgrade
+cleanup-e2e-upgrade: ## Clean a retained upgrade run using its UID-bound ARTIFACT_DIR/cleanup.json receipt.
+	UPGRADE_CLEANUP_ONLY=true go test -tags=upgrade_e2e ./test/e2e/upgrade -run '^TestOLMUpgrade$$' -count=1 -timeout=15m -v
 
 ##@ Lint
 

@@ -1,0 +1,68 @@
+# TEMPLATE ONLY: qualify the release pair and adjust both inventories first.
+# This example is API-only N-1 -> API plus five Sentinels N; it does not assert
+# that such a published pair is currently available. Paths are scenario-relative.
+fixtures: fixtures.yaml
+maxUnavailable: 2m # Added components only; existing API/Sentinels must remain available.
+settleDuration: 15s
+hyperFleetConfig:
+  apiVersion: hyperfleet.redhat.com/v1alpha1
+  kind: HyperFleetConfig
+  metadata:
+    name: cluster
+  spec:
+    bundle: cloud-capi
+    api:
+      profile: small
+      database:
+        secretRef:
+          name: upgrade-database
+      auth:
+        enabled: false # Isolated fixture only; not an authenticated RC journey.
+from:
+  componentStatus: false
+  components:
+    - name: api
+      deployment: hyperfleet-api
+      container: hyperfleet-api
+      relatedImage: hyperfleet-api
+      migrationContainer: db-migrate
+to:
+  componentStatus: true
+  components:
+    - name: api
+      deployment: hyperfleet-api
+      container: hyperfleet-api
+      relatedImage: hyperfleet-api
+      migrationContainer: db-migrate
+      hashChange: ${UPGRADE_API_HASH_CHANGE} # Must become an explicit YAML boolean.
+    - name: sentinel-clusters
+      deployment: hyperfleet-sentinel-clusters
+      container: sentinel
+      relatedImage: hyperfleet-sentinel
+    - name: sentinel-nodepools
+      deployment: hyperfleet-sentinel-nodepools
+      container: sentinel
+      relatedImage: hyperfleet-sentinel
+    - name: sentinel-channels
+      deployment: hyperfleet-sentinel-channels
+      container: sentinel
+      relatedImage: hyperfleet-sentinel
+    - name: sentinel-versions
+      deployment: hyperfleet-sentinel-versions
+      container: sentinel
+      relatedImage: hyperfleet-sentinel
+    - name: sentinel-wifconfigs
+      deployment: hyperfleet-sentinel-wifconfigs
+      container: sentinel
+      relatedImage: hyperfleet-sentinel
+dataProbe:
+  service: hyperfleet-api
+  port: 8000
+  collection: /api/hyperfleet/v1/channels
+  body:
+    kind: Channel
+    spec:
+      is_default: false
+      enabled_regex: ".*"
+    labels:
+      purpose: upgrade-test

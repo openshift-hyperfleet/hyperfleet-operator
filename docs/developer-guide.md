@@ -144,6 +144,11 @@ requirements regarding installation of operator.
 
 ## End-to-end tests
 
+For published N−1 → N bundles on a prepared isolated cluster, use the separate
+[OLM Classic upgrade suite](upgrade-testing.md). Its ordinary helper tests run
+under `make test`; live execution requires `make test-e2e-upgrade` and explicit
+release/scenario inputs. It does not reuse the local-manager setup below.
+
 Use a dedicated Kind cluster name that contains no valuable workloads:
 
 ```sh
