@@ -26,5 +26,6 @@ resources:
 - hyperfleetconfig_admin_role.yaml
 - hyperfleetconfig_editor_role.yaml
 - hyperfleetconfig_viewer_role.yaml
-# Registration trust is delegated explicitly, never through generic user roles.
+# Narrow registration-only delegation; the role is unbound and does not
+# aggregate. OLM separately aggregates access for the owned CRD.
 - managementclusterregistration_admin_role.yaml

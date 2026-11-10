@@ -74,8 +74,11 @@ can explicitly delegate it to trusted Hub administrators with a
 ClusterRoleBinding for registration-only access. In an OLM installation, OLM
 also creates its own roles aggregated into generic `admin`, `edit` and `view`:
 cluster-wide `admin`/`edit` principals are trusted registration administrators,
-and cluster-wide `view` principals can read records. A namespace RoleBinding
-does not grant access to this cluster-scoped resource.
+and cluster-wide `view` principals can read records. On OpenShift, the
+built-in `cluster-reader` ClusterRole aggregates `aggregate-to-view`, so
+`cluster-reader` principals can also read records; include them when auditing
+who can see registrations. A namespace RoleBinding does not grant access to
+this cluster-scoped resource.
 
 Both the manifest installation (`make deploy`) and OLM bundle include the
 unbound role as `hyperfleet-operator-managementclusterregistration-admin-role`:
@@ -106,11 +109,20 @@ identities. The dedicated role remains useful when registration-only access is
 preferable to a generic administrative role. Manifest-only installations do not
 run OLM and therefore do not acquire OLM-generated aggregation roles.
 
-Routine OLM uninstall leaves CRDs and their records in place; do not delete the
-registration CRD to uninstall or upgrade the operator. Deleting the CRD destroys
-all registrations. Back up records before lifecycle operations and verify
-retention against the deployed OLM version. A bundle includes the API and role,
-not a registration instance: apply a reviewed record explicitly after installation.
+Deleting the Subscription and the CSV leaves CRDs and their records in place; do
+not delete the registration CRD to uninstall or upgrade the operator. Deleting
+the CRD destroys all registrations. `operator-sdk cleanup` is not equivalent: it
+removes the resources the CSV owns, including the registration CRD, and with it
+every record. Back up the records first:
+
+```bash
+kubectl get managementclusterregistrations -o yaml \
+  > managementclusterregistrations-backup.yaml
+```
+
+Verify retention against the deployed OLM version. A bundle includes the API
+and role, not a registration instance: apply a reviewed record explicitly after
+installation.
 
 ### Manifest-based uninstall
 
