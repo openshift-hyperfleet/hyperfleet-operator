@@ -196,18 +196,15 @@ The catalog is defined by a single template, `catalog/konflux-template.yaml`, ho
     kubectl delete hyperfleetconfig --all
 
     # Subscription and CSV deletion retains CRDs and their records. Back up
-    # registrations anyway so they can be re-applied after any CRD removal;
-    # a failed backup leaves any existing file untouched.
+    # registrations first; any failure stops the sequence before the teardown
+    # below runs.
     kubectl get managementclusterregistrations -o yaml > managementclusterregistrations-backup.tmp &&
-      mv managementclusterregistrations-backup.tmp managementclusterregistrations-backup.yaml
-
-    kubectl delete sub hyperfleet-operator -n <NAMESPACE>
-    kubectl delete csv hyperfleet-operator.v0.0.1 -n <NAMESPACE>
-    kubectl delete catalogsource hyperfleet-operator-catalog -n <NAMESPACE>
-    kubectl delete operatorgroup hyperfleet-operator-group -n <NAMESPACE>
-
-    # Uninstall OLM from your cluster
-    operator-sdk olm uninstall
+      mv managementclusterregistrations-backup.tmp managementclusterregistrations-backup.yaml &&
+      kubectl delete sub hyperfleet-operator -n <NAMESPACE> --ignore-not-found &&
+      kubectl delete csv hyperfleet-operator.v0.0.1 -n <NAMESPACE> --ignore-not-found &&
+      kubectl delete catalogsource hyperfleet-operator-catalog -n <NAMESPACE> --ignore-not-found &&
+      kubectl delete operatorgroup hyperfleet-operator-group -n <NAMESPACE> --ignore-not-found &&
+      operator-sdk olm uninstall
     ```
 
 > **TODO**: HYPERFLEET-1616: OLM V1 install
@@ -233,12 +230,10 @@ Quick testing with `operator-sdk run bundle` (no catalog needed).
 
     # operator-sdk cleanup deletes the CRDs the bundle owns, including the
     # registration CRD, and destroys every registration record with it.
-    # Back up first. A failed backup leaves any existing file untouched and
-    # stops before cleanup.
+    # Back up first; any failure stops the sequence before cleanup and the OLM
+    # uninstall.
     kubectl get managementclusterregistrations -o yaml > managementclusterregistrations-backup.tmp &&
       mv managementclusterregistrations-backup.tmp managementclusterregistrations-backup.yaml &&
-      operator-sdk cleanup hyperfleet-operator -n <NAMESPACE>
-
-    # Uninstall olm
-    operator-sdk olm uninstall
+      operator-sdk cleanup hyperfleet-operator -n <NAMESPACE> &&
+      operator-sdk olm uninstall
     ```
