@@ -113,11 +113,14 @@ Deleting the Subscription and the CSV leaves CRDs and their records in place; do
 not delete the registration CRD to uninstall or upgrade the operator. Deleting
 the CRD destroys all registrations. `operator-sdk cleanup` is not equivalent: it
 removes the resources the CSV owns, including the registration CRD, and with it
-every record. Back up the records first:
+every record. Back up the records first, and stop if the backup fails; writing
+to a temporary file keeps any existing backup intact:
 
 ```bash
 kubectl get managementclusterregistrations -o yaml \
-  > managementclusterregistrations-backup.yaml
+  > managementclusterregistrations-backup.tmp \
+  && mv managementclusterregistrations-backup.tmp \
+  managementclusterregistrations-backup.yaml
 ```
 
 Verify retention against the deployed OLM version. A bundle includes the API

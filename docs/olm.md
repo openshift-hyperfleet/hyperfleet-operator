@@ -196,8 +196,10 @@ The catalog is defined by a single template, `catalog/konflux-template.yaml`, ho
     kubectl delete hyperfleetconfig --all
 
     # Subscription and CSV deletion retains CRDs and their records. Back up
-    # registrations anyway so they can be re-applied after any CRD removal.
-    kubectl get managementclusterregistrations -o yaml > managementclusterregistrations-backup.yaml
+    # registrations anyway so they can be re-applied after any CRD removal;
+    # a failed backup leaves any existing file untouched.
+    kubectl get managementclusterregistrations -o yaml > managementclusterregistrations-backup.tmp &&
+      mv managementclusterregistrations-backup.tmp managementclusterregistrations-backup.yaml
 
     kubectl delete sub hyperfleet-operator -n <NAMESPACE>
     kubectl delete csv hyperfleet-operator.v0.0.1 -n <NAMESPACE>
@@ -231,11 +233,12 @@ Quick testing with `operator-sdk run bundle` (no catalog needed).
 
     # operator-sdk cleanup deletes the CRDs the bundle owns, including the
     # registration CRD, and destroys every registration record with it.
-    # Back up the records first.
-    kubectl get managementclusterregistrations -o yaml > managementclusterregistrations-backup.yaml
+    # Back up first. A failed backup leaves any existing file untouched and
+    # stops before cleanup.
+    kubectl get managementclusterregistrations -o yaml > managementclusterregistrations-backup.tmp &&
+      mv managementclusterregistrations-backup.tmp managementclusterregistrations-backup.yaml &&
+      operator-sdk cleanup hyperfleet-operator -n <NAMESPACE>
 
-    # Uninstall hyperfleet-operator
-    operator-sdk cleanup hyperfleet-operator -n <NAMESPACE>
     # Uninstall olm
     operator-sdk olm uninstall
     ```
