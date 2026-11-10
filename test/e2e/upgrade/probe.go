@@ -311,7 +311,8 @@ func probeIdentity(record map[string]any, runID string) (string, error) {
 }
 
 func (h *harness) recoverProbe(ctx context.Context) error {
-	// The name and label are internally generated DNS labels, not arbitrary TSL.
+	// The name and label are internally generated DNS labels, not arbitrary
+	// Tree Search Language (TSL) expressions accepted by the API search endpoint.
 	if len(validation.IsDNS1123Label(h.state.RunID)) != 0 {
 		return fmt.Errorf("invalid run identity in probe receipt")
 	}

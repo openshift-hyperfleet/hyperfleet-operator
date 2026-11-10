@@ -84,9 +84,9 @@ type ProbeConfig struct {
 // release pair or component inventory is inferred from the developer's machine.
 func LoadConfig() (Config, error) {
 	c := Config{Kubeconfig: os.Getenv(kubeconfigEnv), Catalog: os.Getenv(catalogEnv),
-		FromBundle: os.Getenv(fromBundleEnv), ToBundle: os.Getenv("UPGRADE_TO_BUNDLE"),
-		Channel: os.Getenv(channelEnv), Namespace: os.Getenv("UPGRADE_NAMESPACE"),
-		ArtifactDir: os.Getenv("ARTIFACT_DIR"), OPM: os.Getenv("OPM"),
+		FromBundle: os.Getenv(fromBundleEnv), ToBundle: os.Getenv(toBundleEnv),
+		Channel: os.Getenv(channelEnv), Namespace: os.Getenv(namespaceEnv),
+		ArtifactDir: os.Getenv(artifactDirEnv), OPM: os.Getenv("OPM"),
 		Timeout: 15 * time.Minute, PollInterval: 2 * time.Second}
 	if c.OPM == "" {
 		c.OPM = "opm"
@@ -98,14 +98,14 @@ func LoadConfig() (Config, error) {
 	if c.Namespace == "" {
 		c.Namespace = "hyperfleet-upgrade"
 	}
-	for name, value := range map[string]string{kubeconfigEnv: c.Kubeconfig, "ARTIFACT_DIR": c.ArtifactDir,
-		channelEnv: c.Channel, "UPGRADE_SCENARIO": os.Getenv("UPGRADE_SCENARIO")} {
+	for name, value := range map[string]string{kubeconfigEnv: c.Kubeconfig, artifactDirEnv: c.ArtifactDir,
+		channelEnv: c.Channel, scenarioEnv: os.Getenv(scenarioEnv)} {
 		if strings.TrimSpace(value) == "" {
 			return c, fmt.Errorf("%s is required", name)
 		}
 	}
 	for name, image := range map[string]string{catalogEnv: c.Catalog,
-		fromBundleEnv: c.FromBundle, "UPGRADE_TO_BUNDLE": c.ToBundle} {
+		fromBundleEnv: c.FromBundle, toBundleEnv: c.ToBundle} {
 		if err := pinnedImage(image); err != nil {
 			return c, fmt.Errorf("%s: %w", name, err)
 		}
@@ -116,14 +116,14 @@ func LoadConfig() (Config, error) {
 	if len(validation.IsDNS1123Label(c.Namespace)) != 0 || strings.HasPrefix(c.Namespace, "kube-") {
 		return c, fmt.Errorf("UPGRADE_NAMESPACE must be a non-system DNS label")
 	}
-	if value := os.Getenv("UPGRADE_TIMEOUT"); value != "" {
+	if value := os.Getenv(timeoutEnv); value != "" {
 		var err error
 		c.Timeout, err = time.ParseDuration(value)
 		if err != nil || c.Timeout <= 0 {
 			return c, fmt.Errorf("UPGRADE_TIMEOUT must be a positive duration")
 		}
 	}
-	path, err := filepath.Abs(os.Getenv("UPGRADE_SCENARIO"))
+	path, err := filepath.Abs(os.Getenv(scenarioEnv))
 	if err != nil {
 		return c, err
 	}
@@ -292,4 +292,28 @@ const (
 	catalogEnv      = "UPGRADE_CATALOG"
 	fromBundleEnv   = "UPGRADE_FROM_BUNDLE"
 	systemNamespace = "kube-system"
+)
+
+// Test-runner inputs and fixed mutation keys are shared by execution and recovery.
+const (
+	toBundleEnv             = "UPGRADE_TO_BUNDLE"
+	namespaceEnv            = "UPGRADE_NAMESPACE"
+	artifactDirEnv          = "ARTIFACT_DIR"
+	scenarioEnv             = "UPGRADE_SCENARIO"
+	timeoutEnv              = "UPGRADE_TIMEOUT"
+	retainEnv               = "UPGRADE_RETAIN_ON_SUCCESS"
+	cleanupOnlyEnv          = "UPGRADE_CLEANUP_ONLY"
+	olmAPIVersion           = "operators.coreos.com/v1alpha1"
+	operatorGroupAPIVersion = "operators.coreos.com/v1"
+	noopAnnotation          = "hyperfleet.redhat.com/upgrade-noop"
+	hashProbeAnnotation     = "hyperfleet.redhat.com/upgrade-hash-probe"
+)
+
+const (
+	fieldMetadata            = "metadata"
+	fieldResourceVersion     = "resourceVersion"
+	fieldSource              = "source"
+	fieldInstallPlanApproval = "installPlanApproval"
+	fieldStartingCSV         = "startingCSV"
+	fieldReady               = "ready"
 )

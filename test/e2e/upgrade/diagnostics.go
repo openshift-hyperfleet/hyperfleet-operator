@@ -5,6 +5,7 @@ package upgrade
 import (
 	"context"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -23,6 +24,8 @@ import (
 var bearerPattern = regexp.MustCompile(`(?i)Bearer\s+[^\s"']+`)
 var jwtPattern = regexp.MustCompile(`eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`)
 
+const redactionMarker = "[REDACTED]"
+
 func redact(data string, secrets []string) string {
 	var values []string
 	for _, secret := range secrets {
@@ -31,14 +34,23 @@ func redact(data string, secrets []string) string {
 		}
 		encoded, _ := json.Marshal(secret)
 		values = append(values, secret, base64.StdEncoding.EncodeToString([]byte(secret)),
-			url.QueryEscape(secret), string(encoded[1:len(encoded)-1]))
+			base64.RawStdEncoding.EncodeToString([]byte(secret)), base64.URLEncoding.EncodeToString([]byte(secret)),
+			base64.RawURLEncoding.EncodeToString([]byte(secret)), hex.EncodeToString([]byte(secret)),
+			strings.ToUpper(hex.EncodeToString([]byte(secret))), url.QueryEscape(secret), url.PathEscape(secret),
+			string(encoded[1:len(encoded)-1]))
 	}
+	// Match whole tokens before any shorter Secret value can alter their syntax.
+	values = append(values, bearerPattern.FindAllString(data, -1)...)
+	values = append(values, jwtPattern.FindAllString(data, -1)...)
 	slices.SortFunc(values, func(a, b string) int { return len(b) - len(a) })
+	// Do not exempt short/numeric values: Secret data has no minimum credential
+	// length. A single replacement pass also prevents a later value (e.g. "A")
+	// from corrupting an earlier [REDACTED] marker.
+	replacements := make([]string, 0, len(values)*2)
 	for _, value := range values {
-		data = strings.ReplaceAll(data, value, "[REDACTED]")
+		replacements = append(replacements, value, redactionMarker)
 	}
-	data = bearerPattern.ReplaceAllString(data, "Bearer [REDACTED]")
-	return jwtPattern.ReplaceAllString(data, "[REDACTED JWT]")
+	return strings.NewReplacer(replacements...).Replace(data)
 }
 
 // diagnostics deliberately avoids serializing full Kubernetes objects: their
@@ -74,8 +86,8 @@ func (h *harness) diagnostics(ctx context.Context) error {
 		}
 		for _, obj := range list.Items {
 			resources = append(resources, map[string]any{fieldKind: obj.GetKind(), fieldName: obj.GetName(),
-				fieldUID:          obj.GetUID(),
-				"resourceVersion": obj.GetResourceVersion(), fieldPhase: stringField(&obj, "status", fieldPhase),
+				fieldUID:             obj.GetUID(),
+				fieldResourceVersion: obj.GetResourceVersion(), fieldPhase: stringField(&obj, "status", fieldPhase),
 				"installedCSV": stringField(&obj, "status", "installedCSV"), "version": stringField(&obj,
 					fieldSpec, "version")})
 		}
@@ -91,7 +103,7 @@ func (h *harness) diagnostics(ctx context.Context) error {
 		for _, status := range append(append([]corev1.ContainerStatus{}, pod.Status.ContainerStatuses...),
 			pod.Status.InitContainerStatuses...) {
 			entry := map[string]any{fieldName: status.Name, fieldImage: status.Image, "imageID": status.ImageID,
-				"ready": status.Ready, "restartCount": status.RestartCount}
+				fieldReady: status.Ready, "restartCount": status.RestartCount}
 			if status.State.Terminated != nil {
 				entry["exitCode"] = status.State.Terminated.ExitCode
 				entry["reason"] = status.State.Terminated.Reason
@@ -120,6 +132,8 @@ func (h *harness) diagnostics(ctx context.Context) error {
 	version, err := h.clients.kube.Discovery().ServerVersion()
 	if err == nil {
 		errors = append(errors, h.writeJSON("cluster-version.json", version))
+	} else {
+		errors = append(errors, fmt.Errorf("collect cluster version: %w", err))
 	}
 	return joinErrors(errors)
 }

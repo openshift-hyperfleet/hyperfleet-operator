@@ -19,7 +19,11 @@ import (
 	clienttesting "k8s.io/client-go/testing"
 )
 
-const testLeaseResource = "leases"
+const (
+	testLeaseResource     = "leases"
+	testNamespaceResource = "namespaces"
+	testCoordinationGroup = "coordination.k8s.io"
+)
 
 func savedReceipt(t *testing.T, h *harness) receipt {
 	t.Helper()
@@ -35,12 +39,12 @@ func savedReceipt(t *testing.T, h *harness) receipt {
 }
 
 func TestCleanupRecoversCommittedCreatesAfterLostResponses(t *testing.T) {
-	for _, lost := range []string{testLeaseResource, "namespaces"} {
+	for _, lost := range []string{testLeaseResource, testNamespaceResource} {
 		t.Run(lost, func(t *testing.T) {
 			h := fakeHarness(t)
 			kube := h.clients.kube.(*kubefake.Clientset)
-			leaseGVR := schema.GroupVersionResource{Group: "coordination.k8s.io", Version: "v1", Resource: testLeaseResource}
-			nsGVR := schema.GroupVersionResource{Version: "v1", Resource: "namespaces"}
+			leaseGVR := schema.GroupVersionResource{Group: testCoordinationGroup, Version: "v1", Resource: testLeaseResource}
+			nsGVR := schema.GroupVersionResource{Version: "v1", Resource: testNamespaceResource}
 			if err := kube.Tracker().Delete(leaseGVR, systemNamespace, lockName); err != nil {
 				t.Fatal(err)
 			}
@@ -89,13 +93,60 @@ func TestCleanupRecoversCommittedCreatesAfterLostResponses(t *testing.T) {
 			if !apierrors.IsNotFound(err) || !savedReceipt(t, h).Cleaned {
 				t.Fatal("namespace or incomplete receipt remained", err)
 			}
-			for _, action := range kube.Actions() {
-				if action.GetVerb() == testDeleteVerb {
-					options := action.(clienttesting.DeleteAction).GetDeleteOptions()
-					if options.Preconditions == nil || options.Preconditions.UID == nil || *options.Preconditions.UID == "" {
-						t.Fatal("recovery deletion lacked UID protection")
-					}
-				}
+			assertDeletesCarryUIDPreconditions(t, h)
+		})
+	}
+}
+
+func TestRejectedCreatesClearIntentAndReleaseHeldLease(t *testing.T) {
+	for _, tc := range []struct {
+		name, resource string
+		reject         error
+	}{
+		{"lease forbidden", testLeaseResource, apierrors.NewForbidden(
+			schema.GroupResource{Group: testCoordinationGroup, Resource: testLeaseResource}, lockName,
+			errors.New("denied"))},
+		{"namespace bad request", testNamespaceResource, apierrors.NewBadRequest("rejected namespace")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := fakeHarness(t)
+			kube := h.clients.kube.(*kubefake.Clientset)
+			leaseGVR := schema.GroupVersionResource{Group: testCoordinationGroup, Version: "v1", Resource: testLeaseResource}
+			nsGVR := schema.GroupVersionResource{Version: "v1", Resource: testNamespaceResource}
+			if err := kube.Tracker().Delete(leaseGVR, systemNamespace, lockName); err != nil {
+				t.Fatal(err)
+			}
+			if err := kube.Tracker().Delete(nsGVR, "", h.state.Namespace); err != nil {
+				t.Fatal(err)
+			}
+			h.state.LeaseUID, h.state.NamespaceUID = "", ""
+			if tc.resource != testLeaseResource {
+				kube.PrependReactor("create", testLeaseResource, func(action clienttesting.Action) (bool, runtime.Object, error) {
+					lease := action.(clienttesting.CreateAction).GetObject().(*coordinationv1.Lease)
+					lease.UID = "created-lease"
+					return false, nil, nil
+				})
+			}
+			kube.PrependReactor("create", tc.resource, func(clienttesting.Action) (bool, runtime.Object, error) {
+				return true, nil, tc.reject
+			})
+			if err := h.prepare(t.Context(), nil); err == nil {
+				t.Fatal("rejected Create unexpectedly succeeded")
+			}
+			// Re-read the saved receipt as the separate cleanup command does.
+			h.state = savedReceipt(t, h)
+			if h.state.LeasePending || h.state.NamespacePending {
+				t.Fatal("definitive rejection retained a pending creation", h.state)
+			}
+			if tc.resource != testLeaseResource && h.state.LeaseUID == "" {
+				t.Fatal("the created Lease was not recorded for cleanup")
+			}
+			if err := h.cleanup(t.Context()); err != nil {
+				t.Fatal("cleanup after rejected Create", err)
+			}
+			_, err := kube.CoordinationV1().Leases(systemNamespace).Get(t.Context(), lockName, metav1.GetOptions{})
+			if !apierrors.IsNotFound(err) {
+				t.Fatal("rejected Create left the exclusive Lease", err)
 			}
 		})
 	}
@@ -123,11 +174,7 @@ func TestPendingCreationNeverAdoptsForeignResources(t *testing.T) {
 			if err := h.cleanup(t.Context()); err == nil {
 				t.Fatal("foreign resource was accepted for recovery")
 			}
-			for _, action := range kube.Actions() {
-				if action.GetVerb() == testDeleteVerb {
-					t.Fatal("deleted a resource after failed ownership recovery")
-				}
-			}
+			assertNoDeletes(t, h)
 		})
 	}
 }
@@ -136,7 +183,7 @@ func TestAlreadyExistingNamespaceIsNotRecoveredOrDeleted(t *testing.T) {
 	h := fakeHarness(t)
 	h.state.NamespaceUID, h.state.LeaseUID = "", ""
 	kube := h.clients.kube.(*kubefake.Clientset)
-	leaseGVR := schema.GroupVersionResource{Group: "coordination.k8s.io", Version: "v1", Resource: testLeaseResource}
+	leaseGVR := schema.GroupVersionResource{Group: testCoordinationGroup, Version: "v1", Resource: testLeaseResource}
 	if err := kube.Tracker().Delete(leaseGVR, systemNamespace, lockName); err != nil {
 		t.Fatal(err)
 	}

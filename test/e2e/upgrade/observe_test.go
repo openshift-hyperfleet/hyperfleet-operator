@@ -12,34 +12,29 @@ import (
 	"k8s.io/utils/ptr"
 )
 
-func TestInitialUnavailabilityCannotProveContinuousAvailability(t *testing.T) {
-	now := time.Now()
-	observations := []observation{
-		sample(now, metav1.ConditionFalse, metav1.ConditionFalse),
-		sample(now.Add(time.Second), metav1.ConditionTrue, metav1.ConditionTrue),
-		sample(now.Add(2*time.Second), metav1.ConditionTrue, metav1.ConditionFalse),
-	}
-	if validateHistory(observations, 0) == nil {
-		t.Fatal("unavailable baseline passed")
-	}
-}
-
 func TestInventoryRejectsOmittedSentinelsAndForeignDeployments(t *testing.T) {
 	expected := testExpectations()
 	api := readyDeployment()
 	api.Name = expected.api().Deployment
 	api.OwnerReferences = []metav1.OwnerReference{{UID: "hfc-owner"}}
-	if err := validateInventory([]appsv1.Deployment{api}, expected, "hfc-owner"); err != nil {
-		t.Fatal(err)
-	}
 	sentinel := *api.DeepCopy()
 	sentinel.Name = "hyperfleet-sentinel-clusters"
-	if validateInventory([]appsv1.Deployment{api, sentinel}, expected, "hfc-owner") == nil {
-		t.Fatal("omitted operator-owned Sentinel passed")
-	}
-	api.OwnerReferences = nil
-	if validateInventory([]appsv1.Deployment{api}, expected, "hfc-owner") == nil {
-		t.Fatal("foreign deployment satisfied the expected inventory")
+	foreign := *api.DeepCopy()
+	foreign.OwnerReferences = nil
+	for _, tc := range []struct {
+		name        string
+		deployments []appsv1.Deployment
+		wantError   bool
+	}{
+		{"complete", []appsv1.Deployment{api}, false},
+		{"omitted sentinel", []appsv1.Deployment{api, sentinel}, true},
+		{"foreign deployment", []appsv1.Deployment{foreign}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateInventory(tc.deployments, expected, "hfc-owner"); (err != nil) != tc.wantError {
+				t.Fatalf("error=%v wantError=%v", err, tc.wantError)
+			}
+		})
 	}
 }
 
@@ -60,6 +55,10 @@ func TestConditionHistory(t *testing.T) {
 		invalid bool
 	}{
 		{"complete", func(o []observation) []observation { return o }, 0, false},
+		{"unavailable baseline", func(o []observation) []observation {
+			o[0].Status.Conditions[0].Status = metav1.ConditionFalse
+			return o
+		}, 0, true},
 		{"missed progress", func(o []observation) []observation {
 			o[1].Status.Conditions[1].Status = metav1.ConditionFalse
 			return o
@@ -93,77 +92,100 @@ func TestConditionHistory(t *testing.T) {
 }
 
 func TestStaleAndMissingComponentHealth(t *testing.T) {
-	o := sample(time.Now(), metav1.ConditionTrue, metav1.ConditionFalse)
-	expected := testExpectations()
-	if !statusHealthy(o, expected) {
-		t.Fatal("healthy older release was rejected")
-	}
-	expected.ComponentStatus = true
-	if statusHealthy(o, expected) {
-		t.Fatal("missing per-component status passed")
-	}
-	o.Status.Components = []componentStatus{{Name: apiComponentName,
-		Conditions: append([]metav1.Condition{}, o.Status.Conditions[:2]...)}}
-	if !statusHealthy(o, expected) {
-		t.Fatal("healthy component rejected")
-	}
-	o.Status.Components[0].Conditions[0].ObservedGeneration = 0
-	if statusHealthy(o, expected) {
-		t.Fatal("stale component passed")
+	for _, tc := range []struct {
+		name                                                            string
+		componentStatus, includeComponent, stale, degraded, wantHealthy bool
+	}{
+		{"older release", false, false, false, false, true},
+		{"missing status", true, false, false, false, false},
+		{"healthy component", true, true, false, false, true},
+		{"stale component", true, true, true, false, false},
+		{"degraded HFC", false, false, false, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := sample(time.Now(), metav1.ConditionTrue, metav1.ConditionFalse)
+			expected := testExpectations()
+			expected.ComponentStatus = tc.componentStatus
+			if tc.includeComponent {
+				o.Status.Components = []componentStatus{{Name: apiComponentName,
+					Conditions: append([]metav1.Condition{}, o.Status.Conditions[:2]...)}}
+			}
+			if tc.stale {
+				o.Status.Components[0].Conditions[0].ObservedGeneration = 0
+			}
+			if tc.degraded {
+				o.Status.Conditions[2].Status = metav1.ConditionTrue
+			}
+			if statusHealthy(o, expected) != tc.wantHealthy {
+				t.Fatal("incorrect health decision")
+			}
+		})
 	}
 }
 
 func TestDeploymentConvergenceRequiresNewReplicas(t *testing.T) {
-	dep := readyDeployment()
-	if !deploymentReady(&dep) {
-		t.Fatal("ready deployment rejected")
-	}
-	dep.Status.UpdatedReplicas = 0
-	if deploymentReady(&dep) {
-		t.Fatal("old ready pods masked failed new rollout")
-	}
-	dep = readyDeployment()
-	dep.Status.Replicas = 2
-	if deploymentReady(&dep) {
-		t.Fatal("old replicas still present")
-	}
-	dep = readyDeployment()
-	dep.Spec.Replicas = ptr.To[int32](0)
-	if deploymentReady(&dep) {
-		t.Fatal("scaled-to-zero deployment passed")
+	for _, tc := range []struct {
+		name      string
+		change    func(*appsv1.Deployment)
+		wantReady bool
+	}{
+		{fieldReady, func(*appsv1.Deployment) {}, true},
+		{"old ready pods", func(d *appsv1.Deployment) { d.Status.UpdatedReplicas = 0 }, false},
+		{"old replicas remain", func(d *appsv1.Deployment) { d.Status.Replicas = 2 }, false},
+		{"scaled to zero", func(d *appsv1.Deployment) { d.Spec.Replicas = ptr.To[int32](0) }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dep := readyDeployment()
+			tc.change(&dep)
+			if deploymentReady(&dep) != tc.wantReady {
+				t.Fatal("incorrect rollout convergence decision")
+			}
+		})
 	}
 }
 
 func TestMigrationMustActuallyComplete(t *testing.T) {
-	status := []corev1.ContainerStatus{{Name: testMigrationContainer, ImageID: "sha256:runtime",
-		State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0}}}}
-	if !successfulInit(status, testMigrationContainer) {
-		t.Fatal("successful migration rejected")
-	}
-	status[0].State.Terminated.ExitCode = 1
-	if successfulInit(status, testMigrationContainer) {
-		t.Fatal("failed migration accepted")
-	}
-	status[0].State.Terminated = nil
-	if successfulInit(status, testMigrationContainer) {
-		t.Fatal("unfinished migration accepted")
+	for _, tc := range []struct {
+		name        string
+		terminated  *corev1.ContainerStateTerminated
+		wantSuccess bool
+	}{
+		{"completed", &corev1.ContainerStateTerminated{ExitCode: 0}, true},
+		{"failed", &corev1.ContainerStateTerminated{ExitCode: 1}, false},
+		{"unfinished", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			statuses := []corev1.ContainerStatus{{Name: testMigrationContainer, ImageID: "sha256:runtime",
+				State: corev1.ContainerState{Terminated: tc.terminated}}}
+			if successfulInit(statuses, testMigrationContainer) != tc.wantSuccess {
+				t.Fatal("incorrect migration result")
+			}
+		})
 	}
 }
 
 func TestHashExpectationsAndIdentity(t *testing.T) {
-	expected := testExpectations()
-	before := map[string]workloadState{apiComponentName: {UID: "dep", Hash: "old"}}
-	after := map[string]workloadState{apiComponentName: {UID: "dep", Hash: "new"}}
-	if validateHashes(before, after, expected) == nil {
-		t.Fatal("unexpected hash change passed")
-	}
-	expected.Components[0].HashChange = ptr.To(true)
-	if err := validateHashes(before, after, expected); err != nil {
-		t.Fatal(err)
-	}
-	after[apiComponentName] = workloadState{UID: "recreated", Hash: "new"}
-	if validateHashes(before, after, expected) == nil {
-		t.Fatal("recreated deployment passed")
+	for _, tc := range []struct {
+		name                               string
+		hashChange, replacement, wantError bool
+	}{
+		{"unexpected hash", false, false, true},
+		{"expected hash", true, false, false},
+		{"replacement", true, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expected := testExpectations()
+			expected.Components[0].HashChange = ptr.To(tc.hashChange)
+			before := map[string]workloadState{apiComponentName: {UID: "dep", Hash: "old"}}
+			next := workloadState{UID: "dep", Hash: "new"}
+			if tc.replacement {
+				next.UID = "recreated"
+			}
+			err := validateHashes(before, map[string]workloadState{apiComponentName: next}, expected)
+			if (err != nil) != tc.wantError {
+				t.Fatalf("error=%v wantError=%v", err, tc.wantError)
+			}
+		})
 	}
 }
 
@@ -187,11 +209,11 @@ func TestOnlyAddedComponentsMayExplainAggregateUnavailability(t *testing.T) {
 				Conditions: []metav1.Condition{{Type: conditionAvailable, Status: tc.existing, ObservedGeneration: 1}}}}
 			if tc.includeAdded {
 				observations[1].Status.Components = append(observations[1].Status.Components,
-					componentStatus{Name: "sentinel", Conditions: []metav1.Condition{{Type: conditionAvailable,
+					componentStatus{Name: testSentinelName, Conditions: []metav1.Condition{{Type: conditionAvailable,
 						Status: tc.added, ObservedGeneration: 1}}})
 			}
 			s := Scenario{From: testExpectations(), To: testExpectations(), MaxUnavailable: "5s"}
-			s.To.Components = append(s.To.Components, Component{Name: "sentinel"})
+			s.To.Components = append(s.To.Components, Component{Name: testSentinelName})
 			if err := validateUpgradeHistory(observations, s); (err != nil) != tc.wantError {
 				t.Fatalf("error=%v wantError=%v", err, tc.wantError)
 			}

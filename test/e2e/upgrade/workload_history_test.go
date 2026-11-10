@@ -61,7 +61,7 @@ func TestWorkloadWatchResumesWithoutRelistingAndRejectsExpiry(t *testing.T) {
 	dyn := h.clients.dynamic.(*dynamicfake.FakeDynamicClient)
 	dyn.PrependReactor("list", "deployments", func(clienttesting.Action) (bool, runtime.Object, error) {
 		return true, &unstructured.UnstructuredList{Object: map[string]any{
-			"metadata": map[string]any{"resourceVersion": "10"}}}, nil
+			fieldMetadata: map[string]any{fieldResourceVersion: "10"}}}, nil
 	})
 	first, second := watch.NewRaceFreeFake(), watch.NewRaceFreeFake()
 	versions := make(chan string, 2)

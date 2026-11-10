@@ -40,7 +40,7 @@ type harness struct {
 // Cleanup; a failed run is never retained merely because retention was requested.
 func Run(ctx context.Context, c Config) (result error) {
 	retain := false
-	if value := os.Getenv("UPGRADE_RETAIN_ON_SUCCESS"); value != "" {
+	if value := os.Getenv(retainEnv); value != "" {
 		var err error
 		retain, err = strconv.ParseBool(value)
 		if err != nil {
@@ -80,6 +80,11 @@ func Run(ctx context.Context, c Config) (result error) {
 		state: receipt{RunID: "upgrade-" + hex.EncodeToString(random[:]),
 			Namespace: c.Namespace, CSVs: []string{pair.From.CSV.Metadata.Name, pair.To.CSV.Metadata.Name}}}
 	defer func() { result = h.finish(result, retain) }()
+	// Record the no-mutations state before platform checks can fail. Recovery
+	// can then distinguish an early failure from a missing or lost receipt.
+	if err = h.saveState(); err != nil {
+		return err
+	}
 	if err = h.writeJSON("run.json", map[string]any{"runID": h.state.RunID, "catalog": c.Catalog,
 		"fromBundle": c.FromBundle, "toBundle": c.ToBundle, fieldChannel: c.Channel, fieldNamespace: c.Namespace,
 		"fromCSV": pair.From.CSV.Metadata.Name, "toCSV": pair.To.CSV.Metadata.Name,
@@ -139,7 +144,7 @@ func Run(ctx context.Context, c Config) (result error) {
 
 func (h *harness) upgrade(ctx context.Context, initialPlan string, before map[string]workloadState) error {
 	for _, gvr := range []schema.GroupVersionResource{deploymentResource, podResource} {
-		history, err := startWorkloadHistory(ctx, h.resource(gvr), gvr)
+		history, err := startWorkloadHistory(ctx, h.clients.watches.Resource(gvr).Namespace(h.config.Namespace), gvr)
 		if err != nil {
 			return err
 		}
@@ -149,7 +154,7 @@ func (h *harness) upgrade(ctx context.Context, initialPlan string, before map[st
 	if err != nil {
 		return err
 	}
-	h.history, err = startHistory(ctx, h.clients.dynamic, baseline)
+	h.history, err = startHistory(ctx, h.clients.watches, baseline)
 	if err != nil {
 		return err
 	}
@@ -245,7 +250,7 @@ func (h *harness) checkHashTriggers(ctx context.Context) error {
 	if annotations == nil {
 		annotations = map[string]string{}
 	}
-	annotations["hyperfleet.redhat.com/upgrade-noop"] = h.state.RunID
+	annotations[noopAnnotation] = h.state.RunID
 	cr.SetAnnotations(annotations)
 	if _, err = h.clients.dynamic.Resource(hfcResource).Update(ctx, cr, metav1.UpdateOptions{}); err != nil {
 		return err
@@ -269,7 +274,7 @@ func (h *harness) checkHashTriggers(ctx context.Context) error {
 	if secret.Annotations == nil {
 		secret.Annotations = map[string]string{}
 	}
-	secret.Annotations["hyperfleet.redhat.com/upgrade-hash-probe"] = h.state.RunID
+	secret.Annotations[hashProbeAnnotation] = h.state.RunID
 	// Update preserves data; resourceVersion is included by the client for CAS.
 	if _, err = h.clients.kube.CoreV1().Secrets(h.config.Namespace).Update(ctx, secret,
 		metav1.UpdateOptions{}); err != nil {

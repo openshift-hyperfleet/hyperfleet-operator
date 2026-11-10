@@ -5,29 +5,38 @@ HYPERFLEET-1413. It installs published bundles through OLM Classic on a prepared
 isolated cluster. It does not build the operator or install this checkout's CRDs.
 The existing `make test-e2e` suite continues to test a locally built manager.
 
+## Operand upgrade policy
+
+The installed operator reconciles the same `HyperFleetConfig/cluster` to the
+operand images and configuration shipped by **that operator release**. The CSV's
+`spec.relatedImages` and `RELATED_IMAGE_*` environment variables identify those
+images. Operand version numbers need not equal the operator version number;
+partners do not select an independent operand version through the CR.
+
+This suite validates sequential upgrades only: N must directly replace N−1 in
+the selected catalog channel. Downgrades and skipped release edges are outside
+the supported test contract. The original CR and its intent survive the upgrade;
+the new operator reconciles its workloads and runs its shipped API migrations.
+See [ADR-0019](https://github.com/openshift-hyperfleet/architecture/blob/main/hyperfleet/adrs/0019-package-hyperfleet-as-operator.md)
+for the ownership boundary and [the component image contract](component-pattern.md#8-add-the-image-and-related-image-plumbing).
+
 ## Release and environment contract
 
 Before running, qualify these inputs together:
 
-- N−1 is an official final operator release. N is a newer RC in the same major
-  version. Their API image digests must differ; an operator-only release cannot
-  prove the API image transition required by 1413.
-- One digest-pinned catalog contains both digest-pinned bundles and a direct
-  `replaces` edge from N to N−1 in the selected channel. N is the channel head.
-  This suite supports explicit sequential graphs, not `skips`/`skipRange` paths.
-- Both bundles support `AllNamespaces` and own only the HyperFleetConfig CRD.
-  Bundle CSVs, related images, and `RELATED_IMAGE_*` values must agree.
-- A scenario names the components actually shipped by each release, their
-  Deployment/container names, whether that release publishes `status.components`,
-  and whether each surviving component's configuration hash should change.
-  The suite also checks the actual operator-owned Deployment inventory.
-- Fixtures must work with both versions. They are namespaced, created rather
-  than applied over existing resources, and their images are pinned by digest.
-  Keep the database, broker, authentication and TLS settings stable across the
-  upgrade. The operator performs its own migrations.
-- The cluster has OLM Classic installed, working registry access, sufficient
-  capacity, and Kubernetes/CPU architectures supported by both releases. OLM v1
-  is outside this suite's scope.
+- **Release pair:** N−1 is an official final release; N is a newer RC in the same major version.
+- **API transition:** Their API image digests differ so the run can prove an API upgrade.
+- **Catalog:** One digest-pinned catalog contains both digest-pinned bundles.
+- **Upgrade edge:** N directly `replaces` N−1 and is the selected channel's head; no `skips`/`skipRange` path.
+- **Install mode:** Both bundles support `AllNamespaces` and own only the HyperFleetConfig CRD.
+- **Image contract:** CSV related images and `RELATED_IMAGE_*` values agree.
+- **Inventory:** The scenario describes each release's actual components and Deployment/container names.
+- **Status contract:** The scenario declares whether each release publishes `status.components`.
+- **Hash contract:** Each surviving component has an explicit expected hash-change decision.
+- **Fixtures:** Namespaced fixtures work with both versions and use digest-pinned images.
+- **Stable dependencies:** Keep database, broker, authentication and TLS settings stable during upgrade.
+- **Migration ownership:** The operator performs its own migrations.
+- **Cluster:** OLM Classic, registry access and sufficient capacity are available on a supported Kubernetes/CPU platform.
 
 Use a freshly allocated, exclusively reserved cluster. Namespace isolation is
 insufficient because `HyperFleetConfig/cluster` and its CRD are cluster-scoped.
@@ -56,6 +65,10 @@ test-runner permission requirement, not a change to operator RBAC.
 | `OPM` | Path to the installed `opm` executable; default `opm` on PATH. |
 | `SKOPEO` | Path to `skopeo` for registry/platform preflight; default `skopeo` on PATH. |
 | `UPGRADE_RETAIN_ON_SUCCESS` | Default `false`. Retain only a successful installation for downstream journeys. |
+
+When using the Make targets, relative `KUBECONFIG`, `UPGRADE_SCENARIO` and
+`ARTIFACT_DIR` paths are resolved from the repository root before Go starts the
+package test. Paths within the scenario remain relative to the scenario file.
 
 Use the repository's pinned Go version. The Make target obtains the repository's
 pinned `opm` in `bin/` if absent; override `OPM` to use an existing executable.
@@ -89,35 +102,49 @@ fixture passwords before use. The example broker password must be URL-safe
 (for example, random hex). Keep rendered fixture files outside the repository
 and protect them with mode `0600`. Do not put registry credentials in YAML.
 
+Replace every literal placeholder before loading the files; the harness does
+not expand environment variables in YAML:
+
+| Placeholder | Required replacement |
+| --- | --- |
+| `${UPGRADE_POSTGRES_IMAGE}` | Full PostgreSQL image reference with a verified `@sha256:` digest, compatible with both releases and the fixture's UID/security settings. |
+| `${UPGRADE_RABBITMQ_IMAGE}` | Full RabbitMQ image reference with a verified `@sha256:` digest and compatible fixture settings. |
+| `${UPGRADE_DB_PASSWORD}` | Random database fixture password; the PostgreSQL pod reads the same Secret. |
+| `${UPGRADE_BROKER_PASSWORD}` | Random URL-safe broker fixture password; use the same value in both Secret entries. |
+| `${UPGRADE_API_HASH_CHANGE}` | Unquoted YAML `true` or `false`, determined from the selected release pair. |
+
 `hashChange` is a required boolean for every target component also present in
 N−1. Determine it from the selected releases' rendered configuration and hash
 semantics. Image changes alone do not imply a config-hash change. This assertion
 is separate from the metadata-only database Secret probe, which must change the
 API hash and roll the API without rolling unrelated Sentinels.
 
-`maxUnavailable` is required. Existing components must remain available in every
-observed Deployment update and, when published, their per-component conditions.
-Set `0s` when the component inventory is unchanged. A positive value bounds only
-an aggregate HFC availability dip attributed to explicitly added components;
-their conditions must identify the cause and all must recover. It never permits
-an existing API or Sentinel outage. This does not establish a zero-downtime
-traffic guarantee. Missing/expired watch history fails the test.
+The E2E assertion checks rollout behavior, not a reimplementation of a release's
+hash algorithm. It runs immutable published binaries that may differ from this
+checkout. Computing `expectedHash` with this checkout's controller would couple
+the oracle to the wrong version and would not independently validate that version.
+The current algorithm's determinism and input sensitivity are checked in
+[`TestComputeConfigHashProperties`](../internal/controller/hyperfleetconfig_rollout_test.go).
+Exact digest verification would require an independent, versioned hash contract
+and its complete inputs for each selected release; this suite does not claim it.
+
+- **Availability budget:** `maxUnavailable` is required; use `0s` for unchanged inventory.
+- **Existing components:** Every observed Deployment update and published component condition must remain available.
+- **Added components:** A positive budget permits only an aggregate HFC dip attributed to their startup; all must recover.
+- **Evidence limit:** These are Kubernetes availability observations, not a zero-downtime traffic guarantee.
+- **Watch completeness:** Missing or expired history fails the test.
 
 `settleDuration` defaults to `15s` (minimum `5s`). It bounds the no-op annotation
 and post-Secret-update stability observations. These checks do not claim that
 an unexpected rollout can never happen after the observation window.
 
-The data probe creates a unique, non-sensitive API record before upgrade and
-reads it through a **new** port-forward after upgrade. It compares the record's
-ID, name, spec and labels, excluding mutable status/timestamps, then requests
-deletion and waits for GET to return HTTP 404. `dataProbe.body` must be valid for
-both API versions; its `name` is replaced with the run's unique name and its
-labels receive an `upgrade_run` ownership marker. Both versions must support
-listing this collection with a `search` filter on `name` and `labels.upgrade_run`;
-this recovers the record if POST commits but its response is lost.
-`port` is the API **pod** port, not an
-arbitrary Service port. The example uses the Channel collection, whose contract
-must be checked at the selected versions.
+- **Data survival:** Create a unique non-sensitive record before upgrade and read it through a new port-forward afterward.
+- **Comparison:** Preserve ID, name, spec and labels; ignore mutable status/timestamps.
+- **Deletion:** Request deletion and wait for GET to return HTTP 404.
+- **Request body:** `dataProbe.body` must work in both API versions; the harness supplies a unique name and `upgrade_run` label.
+- **Lost-response recovery:** Both versions must support collection search by `name` and `labels.upgrade_run`.
+- **Pod port:** `dataProbe.port` selects the API pod's listening port.
+- **Collection:** The example uses Channels; verify its contract in both selected versions.
 
 The example disables API authentication and uses HTTP only on the isolated test
 cluster. For authenticated/TLS coverage, supply compatible fixture Secrets and
@@ -142,8 +169,9 @@ GOTOOLCHAIN=go1.26.0 make test-e2e-upgrade \
 
 Missing prerequisites fail this target. The live Ginkgo entry point is guarded
 by the `upgrade_e2e` build tag; ordinary unit tests never silently attempt a
-cluster connection. The Go test process has a two-hour ceiling, so keep stage
-timeouts consistent with that ceiling and the outer CI job timeout.
+cluster connection. Ginkgo allows two hours for the suite, then up to 25 minutes
+for interrupted cleanup. Go allows 2 hours 30 minutes for the process; keep
+stage timeouts and the outer CI job timeout consistent with those limits.
 
 The test controls both approvals: N−1's initial InstallPlan, then N's upgrade
 InstallPlan. It checks the exact CSV, Subscription owner, referenced plan UID
@@ -171,6 +199,11 @@ pod/runtime-image/migration status, cluster version, bounded redacted logs,
 result and JUnit reports. Secret objects, configuration payloads and arbitrary
 condition messages are not exported. Logs are scrubbed against namespace Secret
 values, the probe token, bearer tokens and JWTs. Restrict artifact access as well.
+Short or numeric Secret values are still redacted: their format does not prove
+they are nonsensitive. This can obscure matching text in logs. Structured
+condition/workload artifacts retain their allowlisted timestamps and counters
+without applying free-text replacement. Encoded-value redaction covers common
+base64, hex, JSON and URL forms, not arbitrary transformations of a credential.
 CI must also archive the runner image digest and test checkout revision, with
 any local patch when testing an uncommitted checkout, alongside these artifacts.
 
@@ -197,6 +230,11 @@ GOTOOLCHAIN=go1.26.0 make cleanup-e2e-upgrade \
 
 The receipt binds cleanup to the cluster's `kube-system` UID and the run's
 namespace/Lease/Subscription/HFC/CRD identities. Preserve it if a process is force-killed.
+A receipt is saved before platform checks or cluster mutations. An early-failure
+receipt with no cluster identity or pending mutations needs no cluster access to
+clean up. A missing receipt is reported explicitly and cleanup makes no changes;
+verify the artifact directory and run history rather than assuming no resources
+exist. Standalone cleanup has a ten-minute total deadline across all steps.
 Lease, namespace and API record creation intents are saved before their requests.
 After a lost response, cleanup recovers only resources bearing this run's
 ownership markers, then records their identities before deleting them. A missing,
@@ -219,18 +257,12 @@ git diff --check
 
 `make test` includes the upgrade harness's ordinary unit tests while excluding
 the legacy live `test/e2e` package. Compiling the tagged entry point does not
-prove a live upgrade.
+prove a live upgrade. `make lint`, `make lint-fix` and `make vet` include the
+`upgrade_e2e` build tag for static analysis without executing the live suite.
 
 Prow wiring belongs in `openshift/release`; RC inputs/result enforcement belong
 in `hyperfleet-release`. Shared E2E journeys need an operator-compatible setup
 before they can use a retained installation. Catalog publishing is separately
-tracked by HYPERFLEET-1884/1770/1773. HYPERFLEET-1868 records placement and cadence:
-the current 1413 Jira requirement says every relevant change, while the RC-only
-proposal needs an agreed requirement update. This repository target does not
-claim either CI cadence is already configured.
-
-The checked-out bundle tag pipeline already derives RC/final CSV versions from
-`bundle-v*` tags, but still emits `candidate-vX,stable-vX` bundle annotations.
-Architecture PR #259 proposes `stable-vX` metadata and a separate aggregate
-release catalog. That release work remains separately owned; this test treats
-the supplied catalog's selected channel as authoritative and never rewrites it.
+tracked by HYPERFLEET-1884/1770/1773; placement and cadence are tracked in
+[HYPERFLEET-1868](https://redhat.atlassian.net/browse/HYPERFLEET-1868).
+The supplied catalog's selected channel is authoritative; this test never rewrites it.

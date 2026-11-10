@@ -33,11 +33,11 @@ func exampleConfig(t *testing.T) Config {
 		}
 	}
 	for name, value := range map[string]string{
-		kubeconfigEnv: filepath.Join(dir, "explicit.kubeconfig"), "ARTIFACT_DIR": filepath.Join(dir, "artifacts"),
+		kubeconfigEnv: filepath.Join(dir, "explicit.kubeconfig"), artifactDirEnv: filepath.Join(dir, "artifacts"),
 		catalogEnv: testImage("catalog", "e"), fromBundleEnv: testImage("bundle", "a"),
-		"UPGRADE_TO_BUNDLE": testImage("bundle", "b"), channelEnv: testChannel,
-		"UPGRADE_SCENARIO": filepath.Join(dir, "scenario.yaml"), "UPGRADE_TIMEOUT": "",
-		"UPGRADE_NAMESPACE": "", "OPM": "", "UPGRADE_RETAIN_ON_SUCCESS": "",
+		toBundleEnv: testImage("bundle", "b"), channelEnv: testChannel,
+		scenarioEnv: filepath.Join(dir, "scenario.yaml"), timeoutEnv: "",
+		namespaceEnv: "", "OPM": "", retainEnv: "",
 	} {
 		t.Setenv(name, value)
 	}
@@ -67,8 +67,8 @@ func TestConfigFailsClosed(t *testing.T) {
 		{"mutable catalog", catalogEnv, "quay.io/test/catalog:latest"},
 		{"missing pair", fromBundleEnv, ""},
 		{"missing channel", channelEnv, ""},
-		{"system namespace", "UPGRADE_NAMESPACE", systemNamespace},
-		{"invalid deadline", "UPGRADE_TIMEOUT", "0s"},
+		{"system namespace", namespaceEnv, systemNamespace},
+		{"invalid deadline", timeoutEnv, "0s"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			exampleConfig(t)
@@ -90,6 +90,36 @@ func TestScenarioRequiresExplicitHashContract(t *testing.T) {
 	c.Scenario.To.Components = append(c.Scenario.To.Components, c.Scenario.To.Components[0])
 	if c.Scenario.validate() == nil {
 		t.Fatal("duplicate workload accepted")
+	}
+}
+
+func TestScenarioRejectsInvalidRuntimeContracts(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*Scenario)
+	}{
+		{"missing availability bound", func(s *Scenario) { s.MaxUnavailable = "" }},
+		{"negative availability bound", func(s *Scenario) { s.MaxUnavailable = "-1s" }},
+		{"invalid availability bound", func(s *Scenario) { s.MaxUnavailable = "not-a-duration" }},
+		{"short stability window", func(s *Scenario) { s.SettleDuration = "4s" }},
+		{"invalid stability window", func(s *Scenario) { s.SettleDuration = "not-a-duration" }},
+		{"zero port", func(s *Scenario) { s.DataProbe.Port = 0 }},
+		{"negative port", func(s *Scenario) { s.DataProbe.Port = -1 }},
+		{"high port", func(s *Scenario) { s.DataProbe.Port = 65536 }},
+		{"non API collection", func(s *Scenario) { s.DataProbe.Collection = "/channels" }},
+		{"query in collection", func(s *Scenario) { s.DataProbe.Collection = "/api/channels?x=y" }},
+		{"fragment in collection", func(s *Scenario) { s.DataProbe.Collection = "/api/channels#x" }},
+		{"traversal in collection", func(s *Scenario) { s.DataProbe.Collection = "/api/../channels" }},
+		{"CA without server", func(s *Scenario) { s.DataProbe.CAFile = "ca.pem" }},
+		{"server without CA", func(s *Scenario) { s.DataProbe.ServerName = "api.example.test" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := exampleConfig(t)
+			tc.mutate(&c.Scenario)
+			if c.Scenario.validate() == nil {
+				t.Fatal("invalid scenario accepted")
+			}
+		})
 	}
 }
 

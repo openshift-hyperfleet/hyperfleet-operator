@@ -117,9 +117,9 @@ func (h *harness) prepare(ctx context.Context, fixtures []unstructured.Unstructu
 		Spec:       coordinationv1.LeaseSpec{HolderIdentity: ptr.To(h.state.RunID)},
 	}, metav1.CreateOptions{})
 	if err != nil {
-		if apierrors.IsAlreadyExists(err) {
+		if createDefinitelyRejected(err) {
 			h.state.LeasePending = false
-			return combineErrors(err, h.saveState())
+			return combineErrors(fmt.Errorf("obtain exclusive upgrade lease: %w", err), h.saveState())
 		}
 		return fmt.Errorf("obtain exclusive upgrade lease (never stolen automatically): %w", err)
 	}
@@ -154,9 +154,9 @@ func (h *harness) prepare(ctx context.Context, fixtures []unstructured.Unstructu
 		ObjectMeta: metav1.ObjectMeta{Name: h.config.Namespace, Labels: map[string]string{runLabel: h.state.RunID}},
 	}, metav1.CreateOptions{})
 	if err != nil {
-		if apierrors.IsAlreadyExists(err) {
+		if createDefinitelyRejected(err) {
 			h.state.NamespacePending = false
-			return combineErrors(err, h.saveState())
+			return combineErrors(fmt.Errorf("create fresh test namespace: %w", err), h.saveState())
 		}
 		return fmt.Errorf("create fresh test namespace: %w", err)
 	}
@@ -231,6 +231,26 @@ func ignoreNotFound(err error) error {
 		return nil
 	}
 	return err
+}
+
+// These API rejections prove Create did not commit. Transport failures,
+// timeouts, and server errors leave a pending intent for ownership recovery.
+func createDefinitelyRejected(err error) bool {
+	// Wrapped errors may retain evidence of earlier attempts. Do not discard
+	// that ambiguity by unwrapping them into an otherwise definitive rejection.
+	status, ok := err.(*apierrors.StatusError)
+	if !ok {
+		return false
+	}
+	switch status.ErrStatus.Reason {
+	case metav1.StatusReasonAlreadyExists, metav1.StatusReasonBadRequest,
+		metav1.StatusReasonForbidden, metav1.StatusReasonInvalid,
+		metav1.StatusReasonMethodNotAllowed, metav1.StatusReasonNotFound,
+		metav1.StatusReasonUnauthorized, metav1.StatusReasonUnsupportedMediaType:
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *harness) cleanup(ctx context.Context) error {
@@ -474,10 +494,16 @@ func (h *harness) waitGone(ctx context.Context, gvr schema.GroupVersionResource,
 
 // Cleanup removes only resources recorded by a retained/interrupted run.
 func Cleanup(ctx context.Context, kubeconfig, artifactDir string) error {
+	ctx, cancel := context.WithTimeout(ctx, cleanupTimeout)
+	defer cancel()
 	if kubeconfig == "" || artifactDir == "" {
 		return fmt.Errorf("KUBECONFIG and ARTIFACT_DIR are required")
 	}
 	data, err := os.ReadFile(filepath.Join(artifactDir, "cleanup.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("no cleanup receipt recorded in ARTIFACT_DIR; no cleanup attempted: " +
+			"verify the run directory and whether cluster mutations occurred")
+	}
 	if err != nil {
 		return err
 	}
@@ -485,8 +511,17 @@ func Cleanup(ctx context.Context, kubeconfig, artifactDir string) error {
 	if err = json.Unmarshal(data, &state); err != nil {
 		return err
 	}
-	if state.RunID == "" || state.Namespace == "" || state.ClusterUID == "" {
+	if state.RunID == "" || state.Namespace == "" {
 		return fmt.Errorf("invalid cleanup receipt")
+	}
+	// An eagerly saved receipt with no cluster identity precedes all mutations.
+	if state.ClusterUID == "" {
+		if state.LeaseUID != "" || state.LeasePending || state.NamespaceUID != "" || state.NamespacePending ||
+			state.Approved || state.HFCUID != "" || state.CRDUID != "" || state.SubscriptionUID != "" ||
+			state.CatalogUID != "" || state.ProbeID != "" || state.ProbePending {
+			return fmt.Errorf("invalid cleanup receipt: resources recorded without cluster identity")
+		}
+		return nil
 	}
 	client, err := newClients(kubeconfig)
 	if err != nil {

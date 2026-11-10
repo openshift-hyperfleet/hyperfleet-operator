@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -109,7 +110,7 @@ func TestWatchReconnectFailureIsReported(t *testing.T) {
 }
 
 func validPlan() *unstructured.Unstructured {
-	p := object("operators.coreos.com/v1alpha1", "InstallPlan", "install-target", "run-ns", map[string]any{
+	p := object(olmAPIVersion, "InstallPlan", "install-target", "run-ns", map[string]any{
 		"approval": approvalManual, "approved": false, "clusterServiceVersionNames": []any{testTargetCSV}})
 	p.SetOwnerReferences([]metav1.OwnerReference{{Kind: subscriptionKind, UID: "subscription-uid"}})
 	p.Object["status"] = map[string]any{fieldPhase: "RequiresApproval",
@@ -166,7 +167,7 @@ func TestInstallPlanReferenceMustMatchUIDAndNamespace(t *testing.T) {
 	plan.SetUID("plan-uid")
 	for _, field := range []string{fieldUID, fieldNamespace, fieldName} {
 		t.Run(field, func(t *testing.T) {
-			sub := object("operators.coreos.com/v1alpha1", subscriptionKind, subscriptionName,
+			sub := object(olmAPIVersion, subscriptionKind, subscriptionName,
 				plan.GetNamespace(), map[string]any{})
 			ref := map[string]any{fieldUID: string(plan.GetUID()), fieldNamespace: plan.GetNamespace(),
 				fieldName: plan.GetName()}
@@ -192,7 +193,7 @@ func fakeHarness(t *testing.T, objects ...runtime.Object) *harness {
 			catalogResource:    "CatalogSourceList",
 			deploymentResource: "DeploymentList", podResource: "PodList",
 		}, objects...)
-	state := receipt{RunID: testRunID, ClusterUID: "cluster-uid", Namespace: "test-ns",
+	state := receipt{RunID: testRunID, ClusterUID: "cluster-uid", Namespace: testNamespace,
 		NamespaceUID: "namespace-uid", LeaseUID: "lease-uid"}
 	kube := kubefake.NewClientset(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: systemNamespace, UID: state.ClusterUID}},
@@ -202,7 +203,7 @@ func fakeHarness(t *testing.T, objects ...runtime.Object) *harness {
 			UID: state.LeaseUID},
 			Spec: coordinationv1.LeaseSpec{HolderIdentity: ptr.To(state.RunID)}},
 	)
-	return &harness{state: state, clients: clients{kube: kube, dynamic: dyn}, config: Config{
+	return &harness{state: state, clients: clients{kube: kube, dynamic: dyn, watches: dyn}, config: Config{
 		Namespace: state.Namespace, ArtifactDir: t.TempDir(), Timeout: time.Second, PollInterval: time.Millisecond}}
 }
 
@@ -221,11 +222,7 @@ func TestCleanupRefusesReplacedResources(t *testing.T) {
 			if err := h.cleanup(t.Context()); err == nil {
 				t.Fatal("foreign identity accepted")
 			}
-			for _, action := range h.clients.kube.(*kubefake.Clientset).Actions() {
-				if action.GetVerb() == testDeleteVerb {
-					t.Fatalf("deleted %s despite ownership mismatch", action.GetResource())
-				}
-			}
+			assertNoDeletes(t, h)
 		})
 	}
 }
@@ -238,18 +235,7 @@ func TestCleanupUsesUIDPreconditions(t *testing.T) {
 	if err := h.cleanup(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	for _, actions := range [][]clienttesting.Action{h.clients.kube.(*kubefake.Clientset).Actions(),
-		h.clients.dynamic.(*dynamicfake.FakeDynamicClient).Actions()} {
-		for _, action := range actions {
-			if action.GetVerb() != testDeleteVerb {
-				continue
-			}
-			options := action.(clienttesting.DeleteAction).GetDeleteOptions()
-			if options.Preconditions == nil || options.Preconditions.UID == nil || *options.Preconditions.UID == "" {
-				t.Fatalf("delete %s lacked UID protection", action.GetResource())
-			}
-		}
-	}
+	assertDeletesCarryUIDPreconditions(t, h)
 	if !h.state.Cleaned {
 		t.Fatal("cleanup completion not recorded")
 	}
@@ -275,18 +261,18 @@ func TestCleanupCancelsOnlyOwnedInstallPlansBeforeCSVs(t *testing.T) {
 	for _, subPresent := range []bool{true, false} {
 		t.Run(strconv.FormatBool(subPresent), func(t *testing.T) {
 			owned := validPlan()
-			owned.SetNamespace("test-ns")
+			owned.SetNamespace(testNamespace)
 			owned.SetUID("plan-uid")
 			foreign := owned.DeepCopy()
 			foreign.SetName("foreign-plan")
 			foreign.SetUID("foreign-plan-uid")
 			foreign.SetOwnerReferences([]metav1.OwnerReference{{Kind: subscriptionKind, UID: testOtherIdentity}})
-			csv := object("operators.coreos.com/v1alpha1", csvKind, testTargetCSV, "test-ns", map[string]any{})
+			csv := object(olmAPIVersion, csvKind, testTargetCSV, testNamespace, map[string]any{})
 			csv.SetUID("csv-uid")
 			objects := []runtime.Object{owned, foreign, csv}
 			if subPresent {
-				sub := object("operators.coreos.com/v1alpha1", subscriptionKind, subscriptionName,
-					"test-ns", map[string]any{})
+				sub := object(olmAPIVersion, subscriptionKind, subscriptionName,
+					testNamespace, map[string]any{})
 				sub.SetUID("subscription-uid")
 				sub.SetLabels(map[string]string{runLabel: testRunID})
 				objects = append(objects, sub)
@@ -369,15 +355,66 @@ func TestWatchExpiryInvalidatesEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer history.stop()
 	stream.Error(&metav1.Status{Code: 410, Reason: metav1.StatusReasonExpired})
 	select {
 	case <-history.done:
 	case <-time.After(time.Second):
 		t.Fatal("expired watch did not fail")
 	}
-	history.stop()
 	if _, err = history.snapshot(); err == nil {
 		t.Fatal("expired history accepted")
+	}
+}
+
+func TestClosedHistoryWatchesBackOffAndCancel(t *testing.T) {
+	for _, workload := range []bool{false, true} {
+		t.Run(strconv.FormatBool(workload), func(t *testing.T) {
+			h := fakeHarness(t)
+			dyn := h.clients.dynamic.(*dynamicfake.FakeDynamicClient)
+			var calls atomic.Int32
+			dyn.PrependWatchReactor("*", func(clienttesting.Action) (bool, watch.Interface, error) {
+				calls.Add(1)
+				stream := watch.NewRaceFreeFake()
+				stream.Stop()
+				return true, stream, nil
+			})
+			dyn.PrependReactor("list", "deployments", func(clienttesting.Action) (bool, runtime.Object, error) {
+				return true, &unstructured.UnstructuredList{Object: map[string]any{
+					fieldMetadata: map[string]any{fieldResourceVersion: "10"}}}, nil
+			})
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var stop func()
+			var done <-chan struct{}
+			if workload {
+				history, err := startWorkloadHistory(ctx, h.resource(deploymentResource), deploymentResource)
+				if err != nil {
+					t.Fatal(err)
+				}
+				stop, done = history.stop, history.done
+			} else {
+				baseline := object("hyperfleet.redhat.com/v1alpha1", "HyperFleetConfig", hfcName, "", nil)
+				baseline.SetResourceVersion("10")
+				history, err := startHistory(ctx, dyn, baseline)
+				if err != nil {
+					t.Fatal(err)
+				}
+				stop, done = history.stop, history.done
+			}
+			defer stop()
+			// A permanently closed stream must not generate a hot reconnect loop.
+			<-time.After(100 * time.Millisecond)
+			if calls.Load() > 1 {
+				t.Fatal("watch reconnected without backoff")
+			}
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("backoff blocked cancellation")
+			}
+		})
 	}
 }
 
@@ -427,7 +464,7 @@ func TestDataFingerprintIgnoresStatusButDetectsDataLoss(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record["status"] = "ready"
+	record["status"] = fieldReady
 	after, err := recordFingerprint(record)
 	if err != nil || after != before {
 		t.Fatal("status changes must not change the data fingerprint")
@@ -442,4 +479,46 @@ func TestDataFingerprintIgnoresStatusButDetectsDataLoss(t *testing.T) {
 const (
 	testRunID      = "run"
 	testDeleteVerb = "delete"
+)
+
+func deleteActions(h *harness) []clienttesting.Action {
+	return append(h.clients.kube.(*kubefake.Clientset).Actions(),
+		h.clients.dynamic.(*dynamicfake.FakeDynamicClient).Actions()...)
+}
+
+func assertNoDeletes(t *testing.T, h *harness) {
+	t.Helper()
+	for _, action := range deleteActions(h) {
+		if action.GetVerb() == testDeleteVerb || action.GetVerb() == "delete-collection" {
+			t.Fatalf("deleted %s despite ownership mismatch", action.GetResource())
+		}
+	}
+}
+
+func assertDeletesCarryUIDPreconditions(t *testing.T, h *harness) {
+	t.Helper()
+	deletes := 0
+	for _, action := range deleteActions(h) {
+		if action.GetVerb() == "delete-collection" {
+			t.Fatal("bulk deletion cannot enforce individual UID ownership")
+		}
+		if action.GetVerb() != testDeleteVerb {
+			continue
+		}
+		deletes++
+		options := action.(clienttesting.DeleteAction).GetDeleteOptions()
+		if options.Preconditions == nil || options.Preconditions.UID == nil || *options.Preconditions.UID == "" {
+			t.Fatalf("delete %s lacked UID protection", action.GetResource())
+		}
+	}
+	if deletes == 0 {
+		t.Fatal("expected cleanup to perform UID-protected deletions")
+	}
+}
+
+const (
+	testNamespace    = "test-ns"
+	testRuntimeImage = "runtime"
+	testSentinelName = "sentinel"
+	testEnabledRegex = "enabled_regex"
 )

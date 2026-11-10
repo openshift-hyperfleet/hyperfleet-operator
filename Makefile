@@ -73,7 +73,7 @@ fmt: ## Run go fmt against code.
 
 .PHONY: vet
 vet: ## Run go vet against code.
-	go vet ./...
+	go vet -tags=upgrade_e2e ./...
 
 .PHONY: gofmt
 gofmt: fmt ## Alias for fmt (used by the hyperfleet-gofmt pre-commit hook).
@@ -133,13 +133,26 @@ export UPGRADE_SCENARIO UPGRADE_NAMESPACE UPGRADE_TIMEOUT UPGRADE_RETAIN_ON_SUCC
 
 .PHONY: test-e2e-upgrade
 test-e2e-upgrade: opm ## Test a published N-1 -> N OLM Classic upgrade on a prepared isolated cluster.
-	@test -n "$(ARTIFACT_DIR)" || { echo "ARTIFACT_DIR is required" >&2; exit 1; }
-	UPGRADE_CLEANUP_ONLY=false go test -tags=upgrade_e2e ./test/e2e/upgrade -run '^TestOLMUpgrade$$' -count=1 -timeout=2h -v \
-		-args -ginkgo.junit-report="$(ARTIFACT_DIR)/junit-upgrade.xml"
+	@for path_var in KUBECONFIG UPGRADE_SCENARIO ARTIFACT_DIR; do \
+		path_value="$${!path_var}"; \
+		if [[ -n "$$path_value" && "$$path_value" != /* ]]; then \
+			printf -v "$$path_var" '%s/%s' "$$PWD" "$$path_value"; export "$$path_var"; \
+		fi; \
+	done; \
+	test -n "$$ARTIFACT_DIR" || { echo "ARTIFACT_DIR is required" >&2; exit 1; }; \
+	UPGRADE_CLEANUP_ONLY=false go test -tags=upgrade_e2e ./test/e2e/upgrade -run '^TestOLMUpgrade$$' -count=1 -timeout=2h30m -v \
+		-args -ginkgo.timeout=2h -ginkgo.junit-report="$$ARTIFACT_DIR/junit-upgrade.xml"
 
 .PHONY: cleanup-e2e-upgrade
 cleanup-e2e-upgrade: ## Clean a retained upgrade run using its UID-bound ARTIFACT_DIR/cleanup.json receipt.
-	UPGRADE_CLEANUP_ONLY=true go test -tags=upgrade_e2e ./test/e2e/upgrade -run '^TestOLMUpgrade$$' -count=1 -timeout=15m -v
+	@for path_var in KUBECONFIG ARTIFACT_DIR; do \
+		path_value="$${!path_var}"; \
+		if [[ -n "$$path_value" && "$$path_value" != /* ]]; then \
+			printf -v "$$path_var" '%s/%s' "$$PWD" "$$path_value"; export "$$path_var"; \
+		fi; \
+	done; \
+	UPGRADE_CLEANUP_ONLY=true go test -tags=upgrade_e2e ./test/e2e/upgrade -run '^TestOLMUpgrade$$' -count=1 -timeout=45m -v \
+		-args -ginkgo.timeout=15m
 
 ##@ Lint
 

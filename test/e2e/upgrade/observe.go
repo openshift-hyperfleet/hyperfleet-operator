@@ -103,6 +103,9 @@ func (h *history) read(ctx context.Context, client dynamic.Interface, stream wat
 				if ctx.Err() != nil {
 					return
 				}
+				if !waitForWatchReconnect(ctx) {
+					return
+				}
 				next, err := client.Resource(hfcResource).Watch(ctx, options)
 				if err != nil {
 					h.fail(fmt.Errorf("condition history reconnect failed"))
@@ -174,6 +177,10 @@ func conditionsHealthy(conditions []metav1.Condition, generation int64, degraded
 }
 
 func statusHealthy(o observation, expected ReleaseExpectations) bool {
+	// Degraded belongs only to the HFC: components cannot observe reconcile or
+	// Secret-resolution errors. ComponentStatus opts out only for older releases
+	// without status.components. Polling tolerates transient degradation until
+	// convergence; the history check requires Degraded=False only at the end.
 	if o.Status.ObservedGeneration != o.Generation || !conditionsHealthy(o.Status.Conditions, o.Generation, true) {
 		return false
 	}
@@ -195,6 +202,19 @@ func statusHealthy(o observation, expected ReleaseExpectations) bool {
 		}
 	}
 	return true
+}
+
+// waitForWatchReconnect bounds reconnect churn without relisting or losing the
+// last resourceVersion. Cancellation interrupts the delay during cleanup.
+func waitForWatchReconnect(ctx context.Context) bool {
+	timer := time.NewTimer(250 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func validateHistory(observations []observation, maxGap time.Duration) error {

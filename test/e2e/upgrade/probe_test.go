@@ -7,6 +7,8 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -17,20 +19,61 @@ import (
 
 const testProbeID = "record-id"
 
+func TestVerifyProbeChecksPreservedData(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		mutate    func(map[string]any)
+		wantError bool
+	}{
+		{"unchanged", func(map[string]any) {}, false},
+		{"status changed", func(r map[string]any) { r["status"] = fieldReady }, false},
+		{"data changed", func(r map[string]any) { r[fieldSpec] = map[string]any{testEnabledRegex: "lost"} }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := probeHarness(t)
+			h.state.Probe, h.state.ProbeID = h.config.Scenario.DataProbe, testProbeID
+			record := ownedProbe(h)
+			fingerprint, err := recordFingerprint(record)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tc.mutate(record)
+			h.probeCall = func(_ context.Context, _ ProbeConfig, method, path string,
+				body map[string]any) (map[string]any, int, error) {
+				if method != http.MethodGet || path != h.state.Probe.Collection+"/"+testProbeID || body != nil {
+					t.Fatal("verification did not GET the recorded identity")
+				}
+				return record, http.StatusOK, nil
+			}
+			err = h.verifyProbe(t.Context(), fingerprint)
+			if (err != nil) != tc.wantError {
+				t.Fatalf("error=%v wantError=%v", err, tc.wantError)
+			}
+			_, artifactErr := os.Stat(filepath.Join(h.config.ArtifactDir, "data-survival.json"))
+			if tc.wantError && !os.IsNotExist(artifactErr) {
+				t.Fatal("failed verification wrote success evidence")
+			}
+			if !tc.wantError && artifactErr != nil {
+				t.Fatal(artifactErr)
+			}
+		})
+	}
+}
+
 func probeHarness(t *testing.T) *harness {
 	t.Helper()
 	h := fakeHarness(t)
 	h.config.Timeout = 50 * time.Millisecond
 	h.config.Scenario.DataProbe = ProbeConfig{Service: testAPIImageName, Port: 8000,
 		Collection: "/api/hyperfleet/v1/channels", Body: map[string]any{
-			"kind": "Channel", fieldSpec: map[string]any{"enabled_regex": ".*"},
+			"kind": "Channel", fieldSpec: map[string]any{testEnabledRegex: ".*"},
 			fieldLabels: map[string]any{"purpose": "upgrade-test"}}}
 	return h
 }
 
 func ownedProbe(h *harness) map[string]any {
 	return map[string]any{"id": testProbeID, fieldName: h.state.RunID,
-		fieldSpec: map[string]any{"enabled_regex": ".*"}, fieldLabels: map[string]any{probeOwnerLabel: h.state.RunID}}
+		fieldSpec: map[string]any{testEnabledRegex: ".*"}, fieldLabels: map[string]any{probeOwnerLabel: h.state.RunID}}
 }
 
 func TestLostProbeResponseRecoversOnlyOwnedRecordAndWaitsForDeletion(t *testing.T) {

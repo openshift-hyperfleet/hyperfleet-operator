@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -45,6 +47,7 @@ func olmResource(name string) schema.GroupVersionResource {
 type clients struct {
 	kube    kubernetes.Interface
 	dynamic dynamic.Interface
+	watches dynamic.Interface
 	rest    *rest.Config
 }
 
@@ -55,17 +58,48 @@ func newClients(kubeconfig string) (clients, error) {
 	}
 	config.UserAgent = "hyperfleet-upgrade-e2e"
 	config.Timeout = 30 * time.Second
+	// POST is not idempotent. In particular, a server timeout may commit a
+	// Create even if a retry later receives a definitive rejection.
+	config.Wrap(withoutCreateRetries)
 	kube, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return clients{}, err
 	}
 	dyn, err := dynamic.NewForConfig(config)
-	return clients{kube: kube, dynamic: dyn, rest: config}, err
+	if err != nil {
+		return clients{}, err
+	}
+	// The ordinary request timeout would truncate the 60-second history watches.
+	// Watch lifetime is bounded by the suite context and server-side timeout.
+	watches, err := newWatchClient(config)
+	return clients{kube: kube, dynamic: dyn, watches: watches, rest: config}, err
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// withoutCreateRetries keeps client-go from retrying POST on Retry-After
+// responses. Ambiguous outcomes must remain visible to receipt-based recovery.
+func withoutCreateRetries(next http.RoundTripper) http.RoundTripper {
+	return roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		response, err := next.RoundTrip(request)
+		if response != nil && request.Method == http.MethodPost {
+			response.Header.Del("Retry-After")
+		}
+		return response, err
+	})
+}
+
+func newWatchClient(config *rest.Config) (dynamic.Interface, error) {
+	watchConfig := rest.CopyConfig(config)
+	watchConfig.Timeout = 0
+	return dynamic.NewForConfig(watchConfig)
 }
 
 func object(apiVersion, kind, name, namespace string, spec map[string]any) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{"apiVersion": apiVersion, fieldKind: kind,
-		"metadata": map[string]any{fieldName: name, fieldNamespace: namespace}, fieldSpec: spec}}
+		fieldMetadata: map[string]any{fieldName: name, fieldNamespace: namespace}, fieldSpec: spec}}
 }
 
 func stringField(obj *unstructured.Unstructured, fields ...string) string {
@@ -87,11 +121,11 @@ func (h *harness) createOLM(ctx context.Context) error {
 		resource schema.GroupVersionResource
 		object   *unstructured.Unstructured
 	}{
-		{catalogResource, object("operators.coreos.com/v1alpha1", "CatalogSource", catalogName, ns,
+		{catalogResource, object(olmAPIVersion, "CatalogSource", catalogName, ns,
 			map[string]any{"sourceType": "grpc", fieldImage: h.config.Catalog,
 				"displayName": "HyperFleet upgrade test"})},
 		{schema.GroupVersionResource{Group: "operators.coreos.com", Version: "v1", Resource: "operatorgroups"},
-			object("operators.coreos.com/v1", "OperatorGroup", "upgrade", ns, map[string]any{})},
+			object(operatorGroupAPIVersion, "OperatorGroup", "upgrade", ns, map[string]any{})},
 	}
 	for _, item := range items {
 		item.object.SetLabels(map[string]string{runLabel: h.state.RunID})
@@ -117,9 +151,9 @@ func (h *harness) createOLM(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
-	sub := object("operators.coreos.com/v1alpha1", subscriptionKind, subscriptionName, ns, map[string]any{
-		fieldName: packageName, fieldChannel: h.config.Channel, "source": catalogName, fieldSourceNamespace: ns,
-		"startingCSV": h.pair.From.CSV.Metadata.Name, "installPlanApproval": approvalManual})
+	sub := object(olmAPIVersion, subscriptionKind, subscriptionName, ns, map[string]any{
+		fieldName: packageName, fieldChannel: h.config.Channel, fieldSource: catalogName, fieldSourceNamespace: ns,
+		fieldStartingCSV: h.pair.From.CSV.Metadata.Name, fieldInstallPlanApproval: approvalManual})
 	sub.SetLabels(map[string]string{runLabel: h.state.RunID})
 	created, err := h.clients.dynamic.Resource(subResource).Namespace(ns).Create(ctx, sub, metav1.CreateOptions{})
 	if err != nil {
@@ -238,8 +272,8 @@ func validatePlanReference(sub, plan *unstructured.Unstructured) error {
 
 func (h *harness) validateSubscription(ctx context.Context, sub *unstructured.Unstructured) error {
 	for key, want := range map[string]string{fieldName: packageName, fieldChannel: h.config.Channel,
-		"source": catalogName, fieldSourceNamespace: h.config.Namespace, "installPlanApproval": approvalManual,
-		"startingCSV": h.pair.From.CSV.Metadata.Name} {
+		fieldSource: catalogName, fieldSourceNamespace: h.config.Namespace, fieldInstallPlanApproval: approvalManual,
+		fieldStartingCSV: h.pair.From.CSV.Metadata.Name} {
 		if stringField(sub, fieldSpec, key) != want {
 			return fmt.Errorf("subscription %s changed during the test", key)
 		}
@@ -340,22 +374,10 @@ func validateInstalledCSV(csv *unstructured.Unstructured, r release) error {
 	if err = actual.validate(); err != nil {
 		return err
 	}
-	if !mapsEqual(actual.Images, r.Images) {
+	if !maps.Equal(actual.Images, r.Images) {
 		return fmt.Errorf("installed relatedImages differ from immutable bundle")
 	}
 	return nil
-}
-
-func mapsEqual(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, v := range a {
-		if b[k] != v {
-			return false
-		}
-	}
-	return true
 }
 
 func deploymentReady(dep *appsv1.Deployment) bool {
@@ -408,7 +430,7 @@ func matchRelatedEnvironment(actual, expected corev1.PodSpec) error {
 					gotEnv[env.Name] = env.Value
 				}
 			}
-			if !mapsEqual(wantEnv, gotEnv) {
+			if !maps.Equal(wantEnv, gotEnv) {
 				return fmt.Errorf("operator related image environment differs from the bundle")
 			}
 		}

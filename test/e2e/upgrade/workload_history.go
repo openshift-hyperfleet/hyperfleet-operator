@@ -125,6 +125,9 @@ func (h *workloadHistory) read(ctx context.Context, stream watch.Interface, opti
 				if ctx.Err() != nil {
 					return nil
 				}
+				if !waitForWatchReconnect(ctx) {
+					return nil
+				}
 				next, err := h.client.Watch(ctx, options)
 				if err != nil {
 					return fmt.Errorf("%s history reconnect failed", h.gvr.Resource)
