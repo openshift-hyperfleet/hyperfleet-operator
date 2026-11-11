@@ -66,20 +66,23 @@ func newClients(kubeconfig string) (clients, error) {
 	config.Wrap(withoutCreateRetries)
 	kube, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		return clients{}, err
+		return clients{}, fmt.Errorf("create Kubernetes client: %w", err)
 	}
 	dyn, err := dynamic.NewForConfig(config)
 	if err != nil {
-		return clients{}, err
+		return clients{}, fmt.Errorf("create dynamic client: %w", err)
 	}
 	// The ordinary request timeout would truncate the 60-second history watches.
 	// Watch lifetime is bounded by the suite context and server-side timeout.
 	watches, err := newWatchClient(config)
 	if err != nil {
-		return clients{}, err
+		return clients{}, fmt.Errorf("create watch client: %w", err)
 	}
 	metadataClient, err := newSecretMetadataClient(config)
-	return clients{kube: kube, dynamic: dyn, watches: watches, metadata: metadataClient, rest: config}, err
+	if err != nil {
+		return clients{}, fmt.Errorf("create Secret metadata client: %w", err)
+	}
+	return clients{kube: kube, dynamic: dyn, watches: watches, metadata: metadataClient, rest: config}, nil
 }
 
 func newSecretMetadataClient(config *rest.Config) (metadata.Interface, error) {
@@ -319,18 +322,24 @@ func (h *harness) waitInstalled(ctx context.Context, r release, planName string)
 			return false, err
 		}
 		phase := stringField(plan, "status", fieldPhase)
+		csv, err := h.resource(csvResource).Get(ctx, r.CSV.Metadata.Name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			if phase == phaseFailed {
+				return false, fmt.Errorf("InstallPlan %s failed", planName)
+			}
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if err = h.recordCSVUID(csv); err != nil {
+			return false, err
+		}
 		if phase == phaseFailed {
 			return false, fmt.Errorf("InstallPlan %s failed", planName)
 		}
 		if phase != "Complete" {
 			return false, nil
-		}
-		csv, err := h.resource(csvResource).Get(ctx, r.CSV.Metadata.Name, metav1.GetOptions{})
-		if apierrors.IsNotFound(err) {
-			return false, nil
-		}
-		if err != nil {
-			return false, err
 		}
 		if stringField(csv, "status", fieldPhase) == phaseFailed {
 			return false, fmt.Errorf("CSV failed")
@@ -380,6 +389,24 @@ func (h *harness) waitInstalled(ctx context.Context, r release, planName string)
 		h.state.CRDUID = crd.GetUID()
 		return true, h.saveState()
 	})
+}
+
+func (h *harness) recordCSVUID(csv *unstructured.Unstructured) error {
+	name, uid := csv.GetName(), csv.GetUID()
+	if uid == "" {
+		return fmt.Errorf("CSV %s has no UID", name)
+	}
+	if previous := h.state.CSVUIDs[name]; previous != "" {
+		if previous != uid {
+			return fmt.Errorf("CSV %s was replaced during installation", name)
+		}
+		return nil
+	}
+	if h.state.CSVUIDs == nil {
+		h.state.CSVUIDs = make(map[string]types.UID)
+	}
+	h.state.CSVUIDs[name] = uid
+	return h.saveState()
 }
 
 func validateInstalledCSV(csv *unstructured.Unstructured, r release) error {

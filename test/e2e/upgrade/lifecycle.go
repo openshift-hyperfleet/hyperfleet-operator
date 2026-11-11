@@ -26,23 +26,24 @@ import (
 // receipt contains identities only, never kubeconfig/Secret data. UID
 // preconditions prevent a later cleanup from deleting replacement resources.
 type receipt struct {
-	RunID            string      `json:"runID"`
-	ClusterUID       types.UID   `json:"clusterUID"`
-	Namespace        string      `json:"namespace"`
-	NamespaceUID     types.UID   `json:"namespaceUID,omitempty"`
-	NamespacePending bool        `json:"namespacePending,omitempty"`
-	SubscriptionUID  types.UID   `json:"subscriptionUID,omitempty"`
-	CatalogUID       types.UID   `json:"catalogUID,omitempty"`
-	LeaseUID         types.UID   `json:"leaseUID,omitempty"`
-	LeasePending     bool        `json:"leasePending,omitempty"`
-	HFCUID           types.UID   `json:"hfcUID,omitempty"`
-	CRDUID           types.UID   `json:"crdUID,omitempty"`
-	CSVs             []string    `json:"csvs"`
-	Approved         bool        `json:"approved"`
-	Cleaned          bool        `json:"cleaned"`
-	ProbeID          string      `json:"probeID,omitempty"`
-	ProbePending     bool        `json:"probePending,omitempty"`
-	Probe            ProbeConfig `json:"probe,omitempty"`
+	RunID            string               `json:"runID"`
+	ClusterUID       types.UID            `json:"clusterUID"`
+	Namespace        string               `json:"namespace"`
+	NamespaceUID     types.UID            `json:"namespaceUID,omitempty"`
+	NamespacePending bool                 `json:"namespacePending,omitempty"`
+	SubscriptionUID  types.UID            `json:"subscriptionUID,omitempty"`
+	CatalogUID       types.UID            `json:"catalogUID,omitempty"`
+	LeaseUID         types.UID            `json:"leaseUID,omitempty"`
+	LeasePending     bool                 `json:"leasePending,omitempty"`
+	HFCUID           types.UID            `json:"hfcUID,omitempty"`
+	CRDUID           types.UID            `json:"crdUID,omitempty"`
+	CSVs             []string             `json:"csvs"`
+	CSVUIDs          map[string]types.UID `json:"csvUIDs,omitempty"`
+	Approved         bool                 `json:"approved"`
+	Cleaned          bool                 `json:"cleaned"`
+	ProbeID          string               `json:"probeID,omitempty"`
+	ProbePending     bool                 `json:"probePending,omitempty"`
+	Probe            ProbeConfig          `json:"probe,omitempty"`
 }
 
 var fixtureResources = map[string]schema.GroupVersionResource{
@@ -429,7 +430,14 @@ func (h *harness) cleanupOLM(ctx context.Context) error {
 		if readErr != nil {
 			return readErr
 		}
-		err = h.resource(csvResource).Delete(ctx, name, uidDelete(csv.GetUID()))
+		uid := h.state.CSVUIDs[name]
+		if uid == "" {
+			return fmt.Errorf("cleanup CSV %s has no recorded UID; refusing deletion", name)
+		}
+		if csv.GetUID() != uid {
+			return fmt.Errorf("cleanup CSV %s has been replaced; refusing deletion", name)
+		}
+		err = h.resource(csvResource).Delete(ctx, name, uidDelete(uid))
 		if ignoreNotFound(err) != nil {
 			return err
 		}
@@ -518,7 +526,7 @@ func Cleanup(ctx context.Context, kubeconfig, artifactDir string) error {
 	if state.ClusterUID == "" {
 		if state.LeaseUID != "" || state.LeasePending || state.NamespaceUID != "" || state.NamespacePending ||
 			state.Approved || state.HFCUID != "" || state.CRDUID != "" || state.SubscriptionUID != "" ||
-			state.CatalogUID != "" || state.ProbeID != "" || state.ProbePending {
+			state.CatalogUID != "" || len(state.CSVUIDs) != 0 || state.ProbeID != "" || state.ProbePending {
 			return fmt.Errorf("invalid cleanup receipt: resources recorded without cluster identity")
 		}
 		return nil

@@ -282,6 +282,7 @@ func TestCleanupCancelsOnlyOwnedInstallPlansBeforeCSVs(t *testing.T) {
 			h := fakeHarness(t, objects...)
 			h.state.SubscriptionUID = "subscription-uid"
 			h.state.CSVs = []string{testTargetCSV}
+			h.state.CSVUIDs = map[string]types.UID{testTargetCSV: csv.GetUID()}
 			if err := h.cleanupOLM(t.Context()); err != nil {
 				t.Fatal(err)
 			}
@@ -305,6 +306,47 @@ func TestCleanupCancelsOnlyOwnedInstallPlansBeforeCSVs(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCleanupRefusesUnrecordedOrReplacedCSV(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		uid  types.UID
+	}{
+		{name: "unrecorded"},
+		{name: "replaced", uid: "previous-csv-uid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			csv := object(olmAPIVersion, csvKind, testTargetCSV, testNamespace, map[string]any{})
+			csv.SetUID("current-csv-uid")
+			h := fakeHarness(t, csv)
+			h.state.CSVs = []string{testTargetCSV}
+			if tc.uid != "" {
+				h.state.CSVUIDs = map[string]types.UID{testTargetCSV: tc.uid}
+			}
+			if err := h.cleanupOLM(t.Context()); err == nil {
+				t.Fatal("cleanup accepted a CSV without the recorded identity")
+			}
+			assertNoDeletes(t, h)
+		})
+	}
+}
+
+func TestCSVUIDReceiptRejectsReplacement(t *testing.T) {
+	h := fakeHarness(t)
+	first := object(olmAPIVersion, csvKind, testTargetCSV, testNamespace, map[string]any{})
+	first.SetUID("original-csv-uid")
+	if err := h.recordCSVUID(first); err != nil {
+		t.Fatal(err)
+	}
+	if got := savedReceipt(t, h).CSVUIDs[testTargetCSV]; got != first.GetUID() {
+		t.Fatalf("CSV identity was not saved: %s", got)
+	}
+	replacement := first.DeepCopy()
+	replacement.SetUID("replacement-csv-uid")
+	if err := h.recordCSVUID(replacement); err == nil {
+		t.Fatal("a replacement CSV was accepted during installation")
 	}
 }
 
@@ -390,7 +432,8 @@ func TestClosedHistoryWatchesBackOffAndCancel(t *testing.T) {
 			var stop func()
 			var done <-chan struct{}
 			if workload {
-				history, err := startWorkloadHistory(ctx, h.resource(deploymentResource), deploymentResource)
+				history, err := startWorkloadHistory(ctx, h.resource(deploymentResource), deploymentResource,
+					h.config.Timeout)
 				if err != nil {
 					t.Fatal(err)
 				}

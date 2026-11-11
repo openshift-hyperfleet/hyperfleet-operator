@@ -80,8 +80,12 @@ type workloadHistory struct {
 }
 
 func startWorkloadHistory(ctx context.Context, client dynamic.ResourceInterface,
-	gvr schema.GroupVersionResource) (*workloadHistory, error) {
-	baseline, err := client.List(ctx, metav1.ListOptions{})
+	gvr schema.GroupVersionResource, listTimeout time.Duration) (*workloadHistory, error) {
+	// The watch client has no request timeout; bound its List separately so the
+	// long-lived watch keeps the original context.
+	listCtx, cancelList := context.WithTimeout(ctx, listTimeout)
+	baseline, err := client.List(listCtx, metav1.ListOptions{})
+	cancelList()
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +181,9 @@ func (h *workloadHistory) snapshot() ([]workloadObservation, error) {
 // Wait for the watch to consume the final list's object versions. A healthy GET
 // must not let an asynchronously read watch omit an earlier failed rollout.
 func (h *harness) finishWorkloadHistory(ctx context.Context, history *workloadHistory) error {
-	checkpoint, err := history.client.List(ctx, metav1.ListOptions{})
+	listCtx, cancelList := context.WithTimeout(ctx, h.config.Timeout)
+	checkpoint, err := history.client.List(listCtx, metav1.ListOptions{})
+	cancelList()
 	if err != nil {
 		return err
 	}

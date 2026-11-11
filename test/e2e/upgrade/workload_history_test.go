@@ -5,6 +5,7 @@ package upgrade
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -14,9 +15,43 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	clienttesting "k8s.io/client-go/testing"
 )
+
+type blockingListResource struct{ dynamic.ResourceInterface }
+
+func (blockingListResource) List(ctx context.Context, _ metav1.ListOptions) (*unstructured.UnstructuredList, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestWorkloadHistoryListsUseStageTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(context.Context, *harness) error
+	}{
+		{"baseline", func(ctx context.Context, h *harness) error {
+			_, err := startWorkloadHistory(ctx, blockingListResource{}, deploymentResource, h.config.Timeout)
+			return err
+		}},
+		{"checkpoint", func(ctx context.Context, h *harness) error {
+			return h.finishWorkloadHistory(ctx, &workloadHistory{client: blockingListResource{},
+				gvr: deploymentResource})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := fakeHarness(t)
+			h.config.Timeout = 25 * time.Millisecond
+			parent, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			if err := tc.run(parent, h); !errors.Is(err, context.DeadlineExceeded) || parent.Err() != nil {
+				t.Fatalf("List did not stop at the stage deadline: %v (parent: %v)", err, parent.Err())
+			}
+		})
+	}
+}
 
 func TestWorkloadHistoryCatchesAnOutageDespiteHealthyFinalPods(t *testing.T) {
 	for _, event := range []watch.EventType{watch.Modified, watch.Deleted} {
@@ -74,7 +109,8 @@ func TestWorkloadWatchResumesWithoutRelistingAndRejectsExpiry(t *testing.T) {
 		}
 		return true, second, nil
 	})
-	history, err := startWorkloadHistory(t.Context(), h.resource(deploymentResource), deploymentResource)
+	history, err := startWorkloadHistory(t.Context(), h.resource(deploymentResource), deploymentResource,
+		h.config.Timeout)
 	if err != nil {
 		t.Fatal(err)
 	}

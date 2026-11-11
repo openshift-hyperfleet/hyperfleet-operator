@@ -144,7 +144,8 @@ func Run(ctx context.Context, c Config) (result error) {
 
 func (h *harness) upgrade(ctx context.Context, initialPlan string, before map[string]workloadState) error {
 	for _, gvr := range []schema.GroupVersionResource{deploymentResource, podResource} {
-		history, err := startWorkloadHistory(ctx, h.clients.watches.Resource(gvr).Namespace(h.config.Namespace), gvr)
+		history, err := startWorkloadHistory(ctx, h.clients.watches.Resource(gvr).Namespace(h.config.Namespace),
+			gvr, h.config.Timeout)
 		if err != nil {
 			return err
 		}
