@@ -236,4 +236,8 @@ Quick testing with `operator-sdk run bundle` (no catalog needed).
       mv managementclusterregistrations-backup.tmp managementclusterregistrations-backup.yaml &&
       operator-sdk cleanup hyperfleet-operator -n <NAMESPACE> &&
       operator-sdk olm uninstall
+
+    # If cleanup succeeded but the OLM uninstall failed, rerun only
+    # `operator-sdk olm uninstall`: the registration CRD is already gone, so a
+    # rerun stops at the backup step above.
     ```
