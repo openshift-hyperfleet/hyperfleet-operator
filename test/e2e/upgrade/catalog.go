@@ -269,6 +269,12 @@ func normalizeImageName(name string) string {
 }
 
 func validatePair(pair releasePair, s Scenario) error {
+	if s.To.HashContract == nil || s.To.HashContract.Bundle != pair.To.Bundle {
+		return fmt.Errorf("target hash contract must match the exact target bundle digest")
+	}
+	if err := s.validateTargetHashContract(); err != nil {
+		return err
+	}
 	from, err := version.ParseSemantic(pair.From.CSV.Spec.Version)
 	if err != nil {
 		return fmt.Errorf("invalid previous CSV version")

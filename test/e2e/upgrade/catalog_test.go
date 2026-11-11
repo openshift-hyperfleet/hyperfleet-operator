@@ -15,6 +15,17 @@ import (
 	"k8s.io/utils/ptr"
 )
 
+const (
+	testAPIConfigName    = "api-config"
+	testConfigKey        = "config.yaml"
+	testDatabaseRole     = "database"
+	testConfigA          = "config-a"
+	testAlpha            = "alpha"
+	testBroker           = "broker"
+	testBrokerSecretName = "broker-secret"
+	testFinalHash        = "final-hash"
+)
+
 func testImage(name, digit string) string {
 	return "quay.io/test/" + name + "@sha256:" + strings.Repeat(digit, 64)
 }
@@ -53,6 +64,14 @@ func testExpectations() ReleaseExpectations {
 	return ReleaseExpectations{Components: []Component{{Name: apiComponentName,
 		Deployment: testAPIImageName, Container: apiComponentName,
 		RelatedImage: testAPIImageName, MigrationContainer: testMigrationContainer, HashChange: ptr.To(false)}}}
+}
+
+func testScenario() Scenario {
+	to := testExpectations()
+	to.HashContract = &HashContract{Bundle: testImage("bundle", "b"), Scheme: hashSchemeV1}
+	to.Components[0].HashInputs = &HashInputs{ConfigMaps: []HashConfigMap{{Name: testAPIConfigName, Key: testConfigKey}},
+		Secrets: []HashSecret{{Role: testDatabaseRole, Name: testDatabaseSecret}}}
+	return Scenario{From: testExpectations(), To: to}
 }
 
 func bundleJSON(t *testing.T, r release) []byte {
@@ -157,7 +176,7 @@ func TestCatalogRequiresExactSequentialPair(t *testing.T) {
 }
 
 func TestPairRejectsUnsupportedUpgradeCoverage(t *testing.T) {
-	scenario := Scenario{From: testExpectations(), To: testExpectations()}
+	scenario := testScenario()
 	for _, tc := range []struct {
 		name, from, to string
 		sameAPI        bool
@@ -182,11 +201,39 @@ func TestPairRejectsUnsupportedUpgradeCoverage(t *testing.T) {
 	}
 }
 
+func TestPairRejectsHashContractForAnotherBundle(t *testing.T) {
+	pair := testPair(t)
+	scenario := testScenario()
+	scenario.To.HashContract.Bundle = testImage("bundle", "c")
+	if err := validatePair(pair, scenario); err == nil || !strings.Contains(err.Error(), "exact target bundle") {
+		t.Fatal("target hash contract was not bound to the selected bundle", err)
+	}
+}
+
+func TestPairRejectsUnsupportedOrIncompleteHashContract(t *testing.T) {
+	pair := testPair(t)
+	for _, tc := range []struct {
+		name   string
+		mutate func(*Scenario)
+	}{
+		{"unknown scheme", func(s *Scenario) { s.To.HashContract.Scheme = "unknown" }},
+		{"missing inputs", func(s *Scenario) { s.To.Components[0].HashInputs = nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scenario := testScenario()
+			tc.mutate(&scenario)
+			if err := validatePair(pair, scenario); err == nil {
+				t.Fatal("preflight accepted an unsupported target hash contract")
+			}
+		})
+	}
+}
+
 func TestPreflightRequiresOPMValidation(t *testing.T) {
 	pair := testPair(t)
 	c := Config{OPM: "opm", Catalog: testImage("catalog", "c"), FromBundle: pair.From.Bundle,
 		ToBundle: pair.To.Bundle,
-		Channel:  testChannel, Scenario: Scenario{From: testExpectations(), To: testExpectations()}}
+		Channel:  testChannel, Scenario: testScenario()}
 	validated := false
 	_, err := preflight(t.Context(), c, func(_ context.Context, _ string, args ...string) ([]byte, error) {
 		if args[0] == "validate" {
@@ -210,7 +257,7 @@ func TestPreflightRequiresOPMValidation(t *testing.T) {
 func TestRegistryMoveDoesNotCountAsAPIUpgrade(t *testing.T) {
 	pair := testPair(t)
 	pair.To.Images[testAPIImageName] = testImage("api-mirror", "a")
-	if err := validatePair(pair, Scenario{From: testExpectations(), To: testExpectations()}); err == nil {
+	if err := validatePair(pair, testScenario()); err == nil {
 		t.Fatal("same API digest under another repository must not count as an image-changing upgrade")
 	}
 }

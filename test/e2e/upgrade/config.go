@@ -53,8 +53,34 @@ type Scenario struct {
 // ReleaseExpectations enumerates components shipped by one release. Older
 // releases without status.components can explicitly set ComponentStatus=false.
 type ReleaseExpectations struct {
-	ComponentStatus bool        `json:"componentStatus"`
-	Components      []Component `json:"components"`
+	ComponentStatus bool          `json:"componentStatus"`
+	Components      []Component   `json:"components"`
+	HashContract    *HashContract `json:"hashContract,omitempty"`
+}
+
+// HashContract binds a test-only hash scheme to one immutable target bundle.
+// The scheme is qualified against that release's source, not this checkout.
+type HashContract struct {
+	Bundle string `json:"bundle"`
+	Scheme string `json:"scheme"`
+}
+
+// HashInputs names the applied configuration and Secret metadata that a target
+// component's release hashes. ConfigMaps are ordered; Secret roles are sorted
+// by the v1 algorithm before hashing.
+type HashInputs struct {
+	ConfigMaps []HashConfigMap `json:"configMaps"`
+	Secrets    []HashSecret    `json:"secrets"`
+}
+
+type HashConfigMap struct {
+	Name string `json:"name"`
+	Key  string `json:"key"`
+}
+
+type HashSecret struct {
+	Role string `json:"role"`
+	Name string `json:"name"`
 }
 
 // Component maps a workload to the related image in its release's CSV.
@@ -65,7 +91,8 @@ type Component struct {
 	RelatedImage       string `json:"relatedImage"`
 	MigrationContainer string `json:"migrationContainer,omitempty"`
 	// HashChange is required on To for components present in both releases.
-	HashChange *bool `json:"hashChange,omitempty"`
+	HashChange *bool       `json:"hashChange,omitempty"`
+	HashInputs *HashInputs `json:"hashInputs,omitempty"`
 }
 
 // ProbeConfig describes a non-sensitive API record used to prove data survives.
@@ -174,6 +201,9 @@ func (s Scenario) validate() error {
 			return err
 		}
 	}
+	if err := s.validateTargetHashContract(); err != nil {
+		return err
+	}
 	for _, old := range s.From.Components {
 		found := false
 		for _, next := range s.To.Components {
@@ -205,6 +235,47 @@ func (s Scenario) validate() error {
 	}
 	if (p.CAFile == "") != (p.ServerName == "") {
 		return fmt.Errorf("dataProbe CAFile and serverName must be set together")
+	}
+	return nil
+}
+
+func (s Scenario) validateTargetHashContract() error {
+	if s.To.HashContract == nil || s.To.HashContract.Scheme != hashSchemeV1 ||
+		pinnedImage(s.To.HashContract.Bundle) != nil {
+		return fmt.Errorf("to.hashContract requires scheme %q and a digest-pinned bundle", hashSchemeV1)
+	}
+	for _, c := range s.To.Components {
+		if err := c.HashInputs.validate(); err != nil {
+			return fmt.Errorf("to component %s hashInputs: %w", c.Name, err)
+		}
+	}
+	return nil
+}
+
+func (inputs *HashInputs) validate() error {
+	if inputs == nil || len(inputs.ConfigMaps) == 0 {
+		return fmt.Errorf("at least one ordered ConfigMap name/key is required")
+	}
+	seenConfigMaps, seenRoles := map[string]bool{}, map[string]bool{}
+	for _, entry := range inputs.ConfigMaps {
+		if len(validation.IsDNS1123Subdomain(entry.Name)) != 0 ||
+			len(validation.IsConfigMapKey(entry.Key)) != 0 {
+			return fmt.Errorf("ConfigMap name and key must be valid")
+		}
+		id := entry.Name + "\x00" + entry.Key
+		if seenConfigMaps[id] {
+			return fmt.Errorf("duplicate ConfigMap name/key %s/%s", entry.Name, entry.Key)
+		}
+		seenConfigMaps[id] = true
+	}
+	for _, entry := range inputs.Secrets {
+		if entry.Role == "" || len(validation.IsDNS1123Subdomain(entry.Name)) != 0 {
+			return fmt.Errorf("secret role and name are required")
+		}
+		if seenRoles[entry.Role] {
+			return fmt.Errorf("duplicate Secret role %s", entry.Role)
+		}
+		seenRoles[entry.Role] = true
 	}
 	return nil
 }
@@ -284,6 +355,7 @@ const (
 	fieldSourceNamespace = "sourceNamespace"
 	appsGroup            = "apps"
 	conditionAvailable   = "Available"
+	hashSchemeV1         = "config-sha256-v1"
 )
 
 const (

@@ -33,6 +33,7 @@ Before running, qualify these inputs together:
 - **Inventory:** The scenario describes each release's actual components and Deployment/container names.
 - **Status contract:** The scenario declares whether each release publishes `status.components`.
 - **Hash contract:** Each surviving component has an explicit expected hash-change decision.
+- **Exact target hash:** The scenario binds a supported hash scheme and every target component's ordered ConfigMap keys and Secret roles to the exact target bundle digest. Qualify these inputs against that bundle's source.
 - **Fixtures:** Namespaced fixtures work with both versions and use digest-pinned images.
 - **Stable dependencies:** Keep database, broker, authentication and TLS settings stable during upgrade.
 - **Migration ownership:** The operator performs its own migrations.
@@ -112,6 +113,7 @@ not expand environment variables in YAML:
 | `${UPGRADE_DB_PASSWORD}` | Random database fixture password; the PostgreSQL pod reads the same Secret. |
 | `${UPGRADE_BROKER_PASSWORD}` | Random URL-safe broker fixture password; use the same value in both Secret entries. |
 | `${UPGRADE_API_HASH_CHANGE}` | Unquoted YAML `true` or `false`, determined from the selected release pair. |
+| `${UPGRADE_TO_BUNDLE_DIGEST}` | The same full digest-pinned bundle reference passed as `UPGRADE_TO_BUNDLE`, after verifying its source uses the declared hash scheme and inputs. |
 
 `hashChange` is a required boolean for every target component also present in
 N−1. Determine it from the selected releases' rendered configuration and hash
@@ -119,14 +121,29 @@ semantics. Image changes alone do not imply a config-hash change. This assertion
 is separate from the metadata-only database Secret probe, which must change the
 API hash and roll the API without rolling unrelated Sentinels.
 
-The E2E assertion checks rollout behavior, not a reimplementation of a release's
-hash algorithm. It runs immutable published binaries that may differ from this
-checkout. Computing `expectedHash` with this checkout's controller would couple
-the oracle to the wrong version and would not independently validate that version.
-The current algorithm's determinism and input sensitivity are checked in
+For the target release, `to.hashContract.bundle` must equal the immutable
+`UPGRADE_TO_BUNDLE` reference. The supported test-only scheme is
+`config-sha256-v1`. For **every** target component, list `hashInputs.configMaps`
+in the release's `Rollout().ConfigEntries` order and list each
+`ReferencedSecrets(...)` role and name under `hashInputs.secrets`. For this
+example the API hashes one `config.yaml` and the database Secret metadata;
+each Sentinel hashes `config.yaml`, `broker.yaml`, and the broker Secret
+metadata. Verify these declarations against the source commit that built the
+target bundle. The example is not evidence that any published RC uses this
+contract. A release with another scheme needs a separately qualified oracle;
+the suite fails closed instead of importing this checkout's controller code.
+
+Once N is healthy, the suite independently calculates the SHA-256 hash from
+the **applied** ConfigMap values and referenced Secret resourceVersions, then
+compares it with every target Deployment's config-hash annotation. It repeats
+the exact API check after the database Secret metadata probe. The exact-hash
+reader requests only Secret metadata; the recorded exact-hash evidence
+contains only source identities and metadata versions, expected digests, and
+observed digests. This proves that the annotation matches the applied inputs,
+not that the rendered configuration itself is correct. The existing
+`hashChange` checks still assert the expected behavior across releases. The
+current algorithm's own properties are also tested in
 [`TestComputeConfigHashProperties`](../internal/controller/hyperfleetconfig_rollout_test.go).
-Exact digest verification would require an independent, versioned hash contract
-and its complete inputs for each selected release; this suite does not claim it.
 
 - **Availability budget:** `maxUnavailable` is required; use `0s` for unchanged inventory.
 - **Existing components:** Every observed Deployment update and published component condition must remain available.
@@ -187,14 +204,16 @@ The target asserts:
 3. The target API's migration init container uses the target image and exits zero.
 4. A complete `Progressing=False → True → False` history, continuous reported
    availability of existing workloads, and bounded startup of added components.
-5. Release-pair hash expectations, API data survival, a no-op HFC annotation,
-   and a metadata-only Secret change with correctly scoped rollout effects.
+5. Release-pair hash expectations and exact target hashes for every component,
+   API data survival, a no-op HFC annotation, and a metadata-only Secret change
+   with an exact new API hash and correctly scoped rollout effects.
 
 ## Evidence and cleanup
 
 Artifacts include the selected image/CSV identities, Go/opm/skopeo versions and
 platform checks, condition and Deployment/pod watch histories, before/after
-workload generations and hashes, API record fingerprint, OLM summaries,
+workload generations and hashes, exact target hash comparisons and source
+metadata identities, API record fingerprint, OLM summaries,
 pod/runtime-image/migration status, cluster version, bounded redacted logs,
 result and JUnit reports. Secret objects, configuration payloads and arbitrary
 condition messages are not exported. Logs are scrubbed against namespace Secret

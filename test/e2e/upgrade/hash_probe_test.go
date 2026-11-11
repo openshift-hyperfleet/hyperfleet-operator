@@ -12,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	kubefake "k8s.io/client-go/kubernetes/fake"
+	metadatafake "k8s.io/client-go/metadata/fake"
 	clienttesting "k8s.io/client-go/testing"
 )
 
@@ -23,7 +24,7 @@ const (
 func healthyAPIHarness(t *testing.T) (*harness, appsv1.Deployment) {
 	t.Helper()
 	cr := object("hyperfleet.redhat.com/v1alpha1", "HyperFleetConfig", hfcName, "", map[string]any{
-		apiComponentName: map[string]any{"database": map[string]any{
+		apiComponentName: map[string]any{testDatabaseRole: map[string]any{
 			"secretRef": map[string]any{fieldName: testDatabaseSecret}}},
 	})
 	baseline := sample(time.Now(), metav1.ConditionTrue, metav1.ConditionFalse)
@@ -36,7 +37,7 @@ func healthyAPIHarness(t *testing.T) (*harness, appsv1.Deployment) {
 	cr.Object["status"] = status
 	h := fakeHarness(t, cr)
 	h.state.HFCUID = cr.GetUID()
-	h.config.Scenario.To = testExpectations()
+	h.config.Scenario.To = testScenario().To
 	h.config.Scenario.SettleDuration = "5s"
 	h.pair = testPair(t)
 	dep := readyDeployment()
@@ -59,7 +60,9 @@ func healthyAPIHarness(t *testing.T) (*harness, appsv1.Deployment) {
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: testDatabaseSecret, Namespace: h.config.Namespace,
 		Labels: map[string]string{runLabel: h.state.RunID}}}
 	kube := h.clients.kube.(*kubefake.Clientset)
-	for _, obj := range []runtime.Object{&dep, pod, secret} {
+	for _, obj := range []runtime.Object{&dep, pod, secret,
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: testAPIConfigName, Namespace: h.config.Namespace,
+			UID: "api-config-uid", ResourceVersion: "1"}, Data: map[string]string{testConfigKey: "test-config"}}} {
 		if err = kube.Tracker().Add(obj); err != nil {
 			t.Fatal(err)
 		}
@@ -74,14 +77,20 @@ func TestHashProbeRequiresChangedHashAtFinalConvergence(t *testing.T) {
 		unrelatedRollout bool
 	}{
 		{"reverted", testInitialHash, true, false},
-		{"persisted", "final-hash", false, false},
-		{"unrelated rollout", "final-hash", true, true},
+		{"persisted", testFinalHash, false, false},
+		{"unrelated rollout", testFinalHash, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, dep := healthyAPIHarness(t)
 			kube := h.clients.kube.(*kubefake.Clientset)
+			metadataClient := h.clients.metadata.(*metadatafake.FakeMetadataClient)
 			sentinel := addHealthySentinel(t, h, dep)
 			stage := 0
+			metadataClient.PrependReactor("get", secretResource.Resource,
+				func(clienttesting.Action) (bool, runtime.Object, error) {
+					return true, &metav1.PartialObjectMetadata{ObjectMeta: metav1.ObjectMeta{
+						Name: testDatabaseSecret, Namespace: h.config.Namespace, UID: "db-uid", ResourceVersion: "2"}}, nil
+				})
 			kube.PrependReactor("update", "secrets", func(clienttesting.Action) (bool, runtime.Object, error) {
 				stage = 1
 				return false, nil, nil
@@ -96,6 +105,10 @@ func TestHashProbeRequiresChangedHashAtFinalConvergence(t *testing.T) {
 				case 2:
 					got.Generation = 4
 					got.Spec.Template.Annotations[hashAnnotation] = tc.finalHash
+					if tc.finalHash == testFinalHash {
+						got.Spec.Template.Annotations[hashAnnotation] = configHashV1([]string{"test-config"},
+							[]oracleSecret{{role: testDatabaseRole, present: true, resourceVersion: "2"}})
+					}
 				}
 				got.Status.ObservedGeneration = got.Generation
 				return got

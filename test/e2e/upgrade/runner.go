@@ -172,6 +172,13 @@ func (h *harness) upgrade(ctx context.Context, initialPlan string, before map[st
 	if err = validateHashes(before, after, h.config.Scenario.To); err != nil {
 		return err
 	}
+	exactHashes, err := h.verifyExactTargetHashes(ctx, h.config.Scenario.To.Components)
+	if err != nil {
+		return err
+	}
+	if err = h.writeJSON("exact-hashes.json", exactHashes); err != nil {
+		return err
+	}
 	// Allow the watch consumer to catch up to the final GET. Require its own
 	// complete transition evidence; a healthy GET alone cannot satisfy this test.
 	var evidenceErr error
@@ -303,11 +310,15 @@ func (h *harness) checkHashTriggers(ctx context.Context) error {
 			return fmt.Errorf("database Secret change rolled unrelated component %s", name)
 		}
 	}
+	exactAPIHash, err := h.verifyExactTargetHashes(ctx, []Component{h.config.Scenario.To.api()})
+	if err != nil {
+		return err
+	}
 	if err = h.unchangedFor(ctx, after, settle); err != nil {
 		return err
 	}
 	return h.writeJSON("hash-probes.json", map[string]any{"before": before, "after": after,
-		"noopAnnotationPassed": true})
+		"noopAnnotationPassed": true, "exactAPIHash": exactAPIHash[apiComponentName]})
 }
 
 func validateSecretRollout(before, after workloadState) error {

@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	kubefake "k8s.io/client-go/kubernetes/fake"
+	metadatafake "k8s.io/client-go/metadata/fake"
 	clienttesting "k8s.io/client-go/testing"
 	"k8s.io/utils/ptr"
 )
@@ -203,7 +204,8 @@ func fakeHarness(t *testing.T, objects ...runtime.Object) *harness {
 			UID: state.LeaseUID},
 			Spec: coordinationv1.LeaseSpec{HolderIdentity: ptr.To(state.RunID)}},
 	)
-	return &harness{state: state, clients: clients{kube: kube, dynamic: dyn, watches: dyn}, config: Config{
+	return &harness{state: state, clients: clients{kube: kube, dynamic: dyn, watches: dyn,
+		metadata: metadatafake.NewSimpleMetadataClient(metadatafake.NewTestScheme())}, config: Config{
 		Namespace: state.Namespace, ArtifactDir: t.TempDir(), Timeout: time.Second, PollInterval: time.Millisecond}}
 }
 

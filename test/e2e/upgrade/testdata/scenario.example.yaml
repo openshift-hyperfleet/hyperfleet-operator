@@ -28,6 +28,9 @@ from:
       migrationContainer: db-migrate
 to:
   componentStatus: true
+  hashContract:
+    bundle: ${UPGRADE_TO_BUNDLE_DIGEST} # Full immutable target bundle reference.
+    scheme: config-sha256-v1 # Verify against this bundle's source before use.
   components:
     - name: api
       deployment: hyperfleet-api
@@ -35,26 +38,78 @@ to:
       relatedImage: hyperfleet-api
       migrationContainer: db-migrate
       hashChange: ${UPGRADE_API_HASH_CHANGE} # Must become an explicit YAML boolean.
+      hashInputs:
+        configMaps:
+          - name: hyperfleet-api-config
+            key: config.yaml
+        secrets:
+          - role: database
+            name: upgrade-database
     - name: sentinel-clusters
       deployment: hyperfleet-sentinel-clusters
       container: sentinel
       relatedImage: hyperfleet-sentinel
+      hashInputs:
+        configMaps:
+          - name: hyperfleet-sentinel-clusters-config
+            key: config.yaml
+          - name: hyperfleet-sentinel-clusters-broker-config
+            key: broker.yaml
+        secrets:
+          - role: broker
+            name: hyperfleet-broker-credentials
     - name: sentinel-nodepools
       deployment: hyperfleet-sentinel-nodepools
       container: sentinel
       relatedImage: hyperfleet-sentinel
+      hashInputs:
+        configMaps:
+          - name: hyperfleet-sentinel-nodepools-config
+            key: config.yaml
+          - name: hyperfleet-sentinel-nodepools-broker-config
+            key: broker.yaml
+        secrets:
+          - role: broker
+            name: hyperfleet-broker-credentials
     - name: sentinel-channels
       deployment: hyperfleet-sentinel-channels
       container: sentinel
       relatedImage: hyperfleet-sentinel
+      hashInputs:
+        configMaps:
+          - name: hyperfleet-sentinel-channels-config
+            key: config.yaml
+          - name: hyperfleet-sentinel-channels-broker-config
+            key: broker.yaml
+        secrets:
+          - role: broker
+            name: hyperfleet-broker-credentials
     - name: sentinel-versions
       deployment: hyperfleet-sentinel-versions
       container: sentinel
       relatedImage: hyperfleet-sentinel
+      hashInputs:
+        configMaps:
+          - name: hyperfleet-sentinel-versions-config
+            key: config.yaml
+          - name: hyperfleet-sentinel-versions-broker-config
+            key: broker.yaml
+        secrets:
+          - role: broker
+            name: hyperfleet-broker-credentials
     - name: sentinel-wifconfigs
       deployment: hyperfleet-sentinel-wifconfigs
       container: sentinel
       relatedImage: hyperfleet-sentinel
+      hashInputs:
+        configMaps:
+          - name: hyperfleet-sentinel-wifconfigs-config
+            key: config.yaml
+          - name: hyperfleet-sentinel-wifconfigs-broker-config
+            key: broker.yaml
+        secrets:
+          - role: broker
+            name: hyperfleet-broker-credentials
 dataProbe:
   service: hyperfleet-api
   port: 8000

@@ -23,7 +23,8 @@ func exampleConfig(t *testing.T) Config {
 	if err != nil {
 		t.Fatal(err)
 	}
-	scenario = []byte(strings.ReplaceAll(string(scenario), "${UPGRADE_API_HASH_CHANGE}", "false"))
+	scenario = []byte(strings.NewReplacer("${UPGRADE_API_HASH_CHANGE}", "false",
+		"${UPGRADE_TO_BUNDLE_DIGEST}", testImage("bundle", "b")).Replace(string(scenario)))
 	fixtures = []byte(strings.NewReplacer("${UPGRADE_POSTGRES_IMAGE}", testImage("postgres", "c"),
 		"${UPGRADE_RABBITMQ_IMAGE}", testImage("rabbitmq", "d"), "${UPGRADE_DB_PASSWORD}", "unit-test-password",
 		"${UPGRADE_BROKER_PASSWORD}", "unit-test-broker-password").Replace(string(fixtures)))
@@ -90,6 +91,37 @@ func TestScenarioRequiresExplicitHashContract(t *testing.T) {
 	c.Scenario.To.Components = append(c.Scenario.To.Components, c.Scenario.To.Components[0])
 	if c.Scenario.validate() == nil {
 		t.Fatal("duplicate workload accepted")
+	}
+}
+
+func TestScenarioRejectsIncompleteExactHashContract(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*Scenario)
+	}{
+		{"missing contract", func(s *Scenario) { s.To.HashContract = nil }},
+		{"unknown scheme", func(s *Scenario) { s.To.HashContract.Scheme = "unknown" }},
+		{"mutable bundle", func(s *Scenario) { s.To.HashContract.Bundle = "quay.io/test/bundle:latest" }},
+		{"missing inputs", func(s *Scenario) { s.To.Components[0].HashInputs = nil }},
+		{"missing ConfigMap", func(s *Scenario) { s.To.Components[0].HashInputs.ConfigMaps = nil }},
+		{"missing key", func(s *Scenario) { s.To.Components[0].HashInputs.ConfigMaps[0].Key = "" }},
+		{"duplicate ConfigMap", func(s *Scenario) {
+			s.To.Components[0].HashInputs.ConfigMaps = append(s.To.Components[0].HashInputs.ConfigMaps,
+				s.To.Components[0].HashInputs.ConfigMaps[0])
+		}},
+		{"missing Secret name", func(s *Scenario) { s.To.Components[0].HashInputs.Secrets[0].Name = "" }},
+		{"duplicate Secret role", func(s *Scenario) {
+			s.To.Components[0].HashInputs.Secrets = append(s.To.Components[0].HashInputs.Secrets,
+				HashSecret{Role: testDatabaseRole, Name: "another-secret"})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := exampleConfig(t)
+			tc.mutate(&c.Scenario)
+			if c.Scenario.validate() == nil {
+				t.Fatal("invalid exact hash contract accepted")
+			}
+		})
 	}
 }
 

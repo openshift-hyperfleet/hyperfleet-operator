@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -38,6 +39,7 @@ var (
 	subResource     = olmResource("subscriptions")
 	planResource    = olmResource("installplans")
 	catalogResource = olmResource("catalogsources")
+	secretResource  = schema.GroupVersionResource{Version: "v1", Resource: "secrets"}
 )
 
 func olmResource(name string) schema.GroupVersionResource {
@@ -45,10 +47,11 @@ func olmResource(name string) schema.GroupVersionResource {
 }
 
 type clients struct {
-	kube    kubernetes.Interface
-	dynamic dynamic.Interface
-	watches dynamic.Interface
-	rest    *rest.Config
+	kube     kubernetes.Interface
+	dynamic  dynamic.Interface
+	watches  dynamic.Interface
+	metadata metadata.Interface
+	rest     *rest.Config
 }
 
 func newClients(kubeconfig string) (clients, error) {
@@ -72,12 +75,33 @@ func newClients(kubeconfig string) (clients, error) {
 	// The ordinary request timeout would truncate the 60-second history watches.
 	// Watch lifetime is bounded by the suite context and server-side timeout.
 	watches, err := newWatchClient(config)
-	return clients{kube: kube, dynamic: dyn, watches: watches, rest: config}, err
+	if err != nil {
+		return clients{}, err
+	}
+	metadataClient, err := newSecretMetadataClient(config)
+	return clients{kube: kube, dynamic: dyn, watches: watches, metadata: metadataClient, rest: config}, err
+}
+
+func newSecretMetadataClient(config *rest.Config) (metadata.Interface, error) {
+	metadataConfig := rest.CopyConfig(config)
+	metadataConfig.Wrap(onlyPartialObjectMetadata)
+	return metadata.NewForConfig(metadataConfig)
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// client-go's metadata GET advertises application/json as a fallback, which
+// permits the API server to return a full Secret. This dedicated client's GETs
+// accept only PartialObjectMetadata, so a conforming server returns metadata.
+func onlyPartialObjectMetadata(next http.RoundTripper) http.RoundTripper {
+	return roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		copy := request.Clone(request.Context())
+		copy.Header.Set("Accept", "application/json;as=PartialObjectMetadata;g=meta.k8s.io;v=v1")
+		return next.RoundTrip(copy)
+	})
+}
 
 // withoutCreateRetries keeps client-go from retrying POST on Retry-After
 // responses. Ambiguous outcomes must remain visible to receipt-based recovery.
