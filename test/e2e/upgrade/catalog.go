@@ -14,42 +14,14 @@ import (
 	"strings"
 
 	"github.com/distribution/reference"
-	appsv1 "k8s.io/api/apps/v1"
+	operatorsv1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/version"
 )
 
-type csvDocument struct {
-	Kind     string            `json:"kind"`
-	Metadata metav1.ObjectMeta `json:"metadata"`
-	Spec     struct {
-		Version       string         `json:"version"`
-		RelatedImages []relatedImage `json:"relatedImages"`
-		Install       struct {
-			Spec struct {
-				Deployments []csvDeployment `json:"deployments"`
-			} `json:"spec"`
-		} `json:"install"`
-		InstallModes []struct {
-			Type      string `json:"type"`
-			Supported bool   `json:"supported"`
-		} `json:"installModes"`
-		CRDs struct {
-			Owned []struct {
-				Name string `json:"name"`
-			} `json:"owned"`
-		} `json:"customresourcedefinitions"`
-	} `json:"spec"`
-}
+const bundleObjectProperty = "olm.bundle.object"
 
-type relatedImage struct {
-	Name  string `json:"name"`
-	Image string `json:"image"`
-}
-type csvDeployment struct {
-	Name string                `json:"name"`
-	Spec appsv1.DeploymentSpec `json:"spec"`
-}
 type property struct {
 	Type  string          `json:"type"`
 	Value json.RawMessage `json:"value"`
@@ -71,7 +43,7 @@ type catalogObject struct {
 
 type release struct {
 	Bundle string
-	CSV    csvDocument
+	CSV    operatorsv1alpha1.ClusterServiceVersion
 	Images map[string]string
 }
 type releasePair struct {
@@ -176,7 +148,7 @@ func parseBundle(data []byte, image string) (release, error) {
 		}
 		found := false
 		for _, prop := range obj.Properties {
-			if prop.Type != "olm.bundle.object" {
+			if prop.Type != bundleObjectProperty {
 				continue
 			}
 			var value struct {
@@ -185,19 +157,23 @@ func parseBundle(data []byte, image string) (release, error) {
 			if json.Unmarshal(prop.Value, &value) != nil {
 				return r, fmt.Errorf("invalid olm.bundle.object property")
 			}
-			var document csvDocument
-			if json.Unmarshal(value.Data, &document) != nil {
+			var meta metav1.TypeMeta
+			if json.Unmarshal(value.Data, &meta) != nil {
 				return r, fmt.Errorf("invalid bundle manifest")
 			}
-			if document.Kind != csvKind {
+			if meta.Kind != csvKind {
 				continue
+			}
+			document, err := decodeCSV(value.Data)
+			if err != nil {
+				return r, err
 			}
 			if found {
 				return r, fmt.Errorf("bundle contains multiple CSVs")
 			}
 			found, r.CSV = true, document
 		}
-		if !found || r.CSV.Metadata.Name != obj.Name {
+		if !found || r.CSV.Name != obj.Name {
 			return r, fmt.Errorf("bundle CSV is missing or disagrees with catalog identity")
 		}
 	}
@@ -207,17 +183,39 @@ func parseBundle(data []byte, image string) (release, error) {
 	return r, r.validate()
 }
 
+// decodeCSV preserves the required version check before the official type can
+// turn an absent spec.version into the zero-value version 0.0.0.
+func decodeCSV(data []byte) (operatorsv1alpha1.ClusterServiceVersion, error) {
+	var csv operatorsv1alpha1.ClusterServiceVersion
+	var obj unstructured.Unstructured
+	if err := json.Unmarshal(data, &obj.Object); err != nil {
+		return csv, fmt.Errorf("invalid CSV document")
+	}
+	v, _, err := unstructured.NestedString(obj.Object, fieldSpec, "version")
+	if err != nil {
+		return csv, fmt.Errorf("invalid CSV version")
+	}
+	if _, err = version.ParseSemantic(v); err != nil {
+		return csv, fmt.Errorf("invalid or missing CSV version")
+	}
+	if err = json.Unmarshal(data, &csv); err != nil {
+		return csv, fmt.Errorf("invalid CSV document")
+	}
+	return csv, nil
+}
+
 func (r *release) validate() error {
 	allNamespaces := false
 	for _, mode := range r.CSV.Spec.InstallModes {
-		if mode.Type == "AllNamespaces" && mode.Supported {
+		if mode.Type == operatorsv1alpha1.InstallModeTypeAllNamespaces && mode.Supported {
 			allNamespaces = true
 		}
 	}
 	if !allNamespaces {
 		return fmt.Errorf("CSV must support AllNamespaces for the cluster-scoped singleton")
 	}
-	if len(r.CSV.Spec.CRDs.Owned) != 1 || r.CSV.Spec.CRDs.Owned[0].Name != hfcCRD {
+	if len(r.CSV.Spec.CustomResourceDefinitions.Owned) != 1 ||
+		r.CSV.Spec.CustomResourceDefinitions.Owned[0].Name != hfcCRD {
 		return fmt.Errorf("upgrade harness supports bundles owning only %s", hfcCRD)
 	}
 	for _, image := range r.CSV.Spec.RelatedImages {
@@ -230,11 +228,11 @@ func (r *release) validate() error {
 		}
 		r.Images[name] = image.Image
 	}
-	if len(r.CSV.Spec.Install.Spec.Deployments) == 0 {
+	if len(r.CSV.Spec.InstallStrategy.StrategySpec.DeploymentSpecs) == 0 {
 		return fmt.Errorf("CSV has no operator deployments")
 	}
 	foundAPI := false
-	for _, dep := range r.CSV.Spec.Install.Spec.Deployments {
+	for _, dep := range r.CSV.Spec.InstallStrategy.StrategySpec.DeploymentSpecs {
 		for _, container := range podImages(dep.Spec.Template.Spec) {
 			if err := pinnedImage(container.Image); err != nil {
 				return fmt.Errorf("operator container: %w", err)
@@ -275,11 +273,11 @@ func validatePair(pair releasePair, s Scenario) error {
 	if err := s.validateTargetHashContract(); err != nil {
 		return err
 	}
-	from, err := version.ParseSemantic(pair.From.CSV.Spec.Version)
+	from, err := version.ParseSemantic(pair.From.CSV.Spec.Version.String())
 	if err != nil {
 		return fmt.Errorf("invalid previous CSV version")
 	}
-	to, err := version.ParseSemantic(pair.To.CSV.Spec.Version)
+	to, err := version.ParseSemantic(pair.To.CSV.Spec.Version.String())
 	if err != nil {
 		return fmt.Errorf("invalid target CSV version")
 	}
@@ -307,7 +305,7 @@ func validatePair(pair releasePair, s Scenario) error {
 		return fmt.Errorf("release pair API images must be pinned by digest")
 	}
 	if oldDigest.Digest() == newDigest.Digest() {
-		return fmt.Errorf("1413 requires an API image-changing pair; operator-only upgrades cannot prove that transition")
+		return fmt.Errorf("release pair must change the API image digest to prove an API image transition")
 	}
 	return nil
 }
@@ -335,7 +333,7 @@ func validateCatalog(data []byte, channel string, pair releasePair) error {
 			channels++
 		}
 	}
-	from, to := pair.From.CSV.Metadata.Name, pair.To.CSV.Metadata.Name
+	from, to := pair.From.CSV.Name, pair.To.CSV.Name
 	if channels != 1 || bundles[from] != pair.From.Bundle || bundles[to] != pair.To.Bundle {
 		return fmt.Errorf("catalog must contain the exact bundle pair in one selected channel")
 	}

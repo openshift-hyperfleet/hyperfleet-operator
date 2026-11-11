@@ -38,7 +38,7 @@ func exampleConfig(t *testing.T) Config {
 		catalogEnv: testImage("catalog", "e"), fromBundleEnv: testImage("bundle", "a"),
 		toBundleEnv: testImage("bundle", "b"), channelEnv: testChannel,
 		scenarioEnv: filepath.Join(dir, "scenario.yaml"), timeoutEnv: "",
-		namespaceEnv: "", "OPM": "", retainEnv: "",
+		namespaceEnv: "", "OPM": "", "PODMAN": "", retainEnv: "",
 	} {
 		t.Setenv(name, value)
 	}

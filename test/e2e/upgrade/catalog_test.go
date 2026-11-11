@@ -9,6 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/blang/semver/v4"
+	operatorversion "github.com/operator-framework/api/pkg/lib/version"
+	operatorsv1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -34,21 +37,21 @@ func testRelease(t *testing.T, v, apiDigit string) release {
 	t.Helper()
 	r := release{Bundle: testImage("bundle", apiDigit), Images: map[string]string{}}
 	r.CSV.Kind = csvKind
-	r.CSV.Metadata.Name = packageName + ".v" + v
-	r.CSV.Spec.Version = v
-	r.CSV.Spec.RelatedImages = []relatedImage{{Name: testAPIImageName, Image: testImage(apiComponentName, apiDigit)},
+	r.CSV.Name = packageName + ".v" + v
+	r.CSV.Spec.Version = operatorversion.OperatorVersion{Version: semver.MustParse(v)}
+	r.CSV.Spec.RelatedImages = []operatorsv1alpha1.RelatedImage{
+		{Name: testAPIImageName, Image: testImage(apiComponentName, apiDigit)},
 		{Name: "hyperfleet-operator", Image: testImage("operator", "f")}}
-	r.CSV.Spec.Install.Spec.Deployments = []csvDeployment{{Name: "operator", Spec: appsv1.DeploymentSpec{
-		Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "manager",
-			Image: testImage("operator", "f"), Env: []corev1.EnvVar{{Name: "RELATED_IMAGE_HYPERFLEET_API",
-				Value: testImage(apiComponentName, apiDigit)}}}}}}}}}
-	r.CSV.Spec.InstallModes = append(r.CSV.Spec.InstallModes, struct {
-		Type      string `json:"type"`
-		Supported bool   `json:"supported"`
-	}{"AllNamespaces", true})
-	r.CSV.Spec.CRDs.Owned = append(r.CSV.Spec.CRDs.Owned, struct {
-		Name string `json:"name"`
-	}{hfcCRD})
+	r.CSV.Spec.InstallStrategy.StrategySpec.DeploymentSpecs = []operatorsv1alpha1.StrategyDeploymentSpec{
+		{Name: "operator", Spec: appsv1.DeploymentSpec{
+			Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "manager",
+				Image: testImage("operator", "f"), Env: []corev1.EnvVar{{Name: "RELATED_IMAGE_HYPERFLEET_API",
+					Value: testImage(apiComponentName, apiDigit)}}}}}}}},
+	}
+	r.CSV.Spec.InstallModes = []operatorsv1alpha1.InstallMode{
+		{Type: operatorsv1alpha1.InstallModeTypeAllNamespaces, Supported: true},
+	}
+	r.CSV.Spec.CustomResourceDefinitions.Owned = []operatorsv1alpha1.CRDDescription{{Name: hfcCRD}}
 	if err := r.validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -85,8 +88,8 @@ func bundleJSON(t *testing.T, r release) []byte {
 		t.Fatal(err)
 	}
 	data, err := json.Marshal(catalogObject{Schema: bundleSchema, Package: packageName,
-		Name: r.CSV.Metadata.Name, Image: r.Bundle,
-		Properties: []property{{Type: "olm.bundle.object", Value: value}}})
+		Name: r.CSV.Name, Image: r.Bundle,
+		Properties: []property{{Type: bundleObjectProperty, Value: value}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,8 +100,8 @@ func catalogJSON(t *testing.T, pair releasePair, entries []channelEntry) []byte 
 	t.Helper()
 	var result []byte
 	objects := []catalogObject{
-		{Schema: bundleSchema, Package: packageName, Name: pair.From.CSV.Metadata.Name, Image: pair.From.Bundle},
-		{Schema: bundleSchema, Package: packageName, Name: pair.To.CSV.Metadata.Name, Image: pair.To.Bundle},
+		{Schema: bundleSchema, Package: packageName, Name: pair.From.CSV.Name, Image: pair.From.Bundle},
+		{Schema: bundleSchema, Package: packageName, Name: pair.To.CSV.Name, Image: pair.To.Bundle},
 		{Schema: "olm.channel", Package: packageName, Name: testChannel, Entries: entries},
 	}
 	for _, object := range objects {
@@ -113,8 +116,8 @@ func catalogJSON(t *testing.T, pair releasePair, entries []channelEntry) []byte 
 }
 
 func testEntries(pair releasePair) []channelEntry {
-	return []channelEntry{{Name: pair.From.CSV.Metadata.Name}, {Name: pair.To.CSV.Metadata.Name,
-		Replaces: pair.From.CSV.Metadata.Name}}
+	return []channelEntry{{Name: pair.From.CSV.Name}, {Name: pair.To.CSV.Name,
+		Replaces: pair.From.CSV.Name}}
 }
 
 func TestBundleMetadataValidation(t *testing.T) {
@@ -126,12 +129,12 @@ func TestBundleMetadataValidation(t *testing.T) {
 		{"valid", func(*release) {}, false},
 		{"mutable operand", func(r *release) { r.CSV.Spec.RelatedImages[0].Image = "quay.io/test/api:latest" }, true},
 		{"env disagreement", func(r *release) {
-			container := &r.CSV.Spec.Install.Spec.Deployments[0].Spec.Template.Spec.Containers[0]
+			container := &r.CSV.Spec.InstallStrategy.StrategySpec.DeploymentSpecs[0].Spec.Template.Spec.Containers[0]
 			container.Env[0].Value = testImage(apiComponentName, "c")
 		}, true},
 		{"unlisted operator", func(r *release) { r.CSV.Spec.RelatedImages = r.CSV.Spec.RelatedImages[:1] }, true},
 		{"no all namespaces", func(r *release) { r.CSV.Spec.InstallModes[0].Supported = false }, true},
-		{"foreign crd", func(r *release) { r.CSV.Spec.CRDs.Owned[0].Name = "other.example.org" }, true},
+		{"foreign crd", func(r *release) { r.CSV.Spec.CustomResourceDefinitions.Owned[0].Name = "other.example.org" }, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := testRelease(t, testPreviousVersion, "a")
@@ -264,7 +267,7 @@ func TestRegistryMoveDoesNotCountAsAPIUpgrade(t *testing.T) {
 
 func TestOperatorEnvironmentMustMatchPublishedBundle(t *testing.T) {
 	r := testRelease(t, testTargetVersion, "b")
-	want := r.CSV.Spec.Install.Spec.Deployments[0].Spec.Template.Spec
+	want := r.CSV.Spec.InstallStrategy.StrategySpec.DeploymentSpecs[0].Spec.Template.Spec
 	actual := want.DeepCopy()
 	if err := matchRelatedEnvironment(*actual, want); err != nil {
 		t.Fatal(err)

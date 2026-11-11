@@ -4,7 +4,7 @@ package upgrade
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/hex"
 	"fmt"
 	"slices"
 	"strings"
@@ -12,6 +12,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+)
+
+const (
+	linuxOS    = "linux"
+	podmanPull = "pull"
 )
 
 type platform struct {
@@ -26,7 +31,7 @@ func clusterPlatforms(nodes []corev1.Node) ([]platform, error) {
 			continue
 		}
 		p := platform{OS: node.Status.NodeInfo.OperatingSystem, Architecture: node.Status.NodeInfo.Architecture}
-		if p.OS != "linux" || p.Architecture == "" {
+		if p.OS != linuxOS || p.Architecture == "" {
 			return nil, fmt.Errorf("target must have known Linux node architectures")
 		}
 		if !slices.Contains(result, p) {
@@ -40,6 +45,10 @@ func clusterPlatforms(nodes []corev1.Node) ([]platform, error) {
 }
 
 func (h *harness) validatePlatforms(ctx context.Context, fixtures []unstructured.Unstructured, run commandFunc) error {
+	toolVersion, err := run(ctx, h.config.Podman, "--version")
+	if err != nil {
+		return fmt.Errorf("podman is required for image platform preflight: %w", err)
+	}
 	nodes, err := h.clients.kube.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return err
@@ -71,21 +80,35 @@ func (h *harness) validatePlatforms(ctx context.Context, fixtures []unstructured
 	images = slices.Compact(images)
 	for _, image := range images {
 		for _, want := range platforms {
-			data, err := run(ctx, h.config.Skopeo, "--override-os", want.OS, "--override-arch", want.Architecture,
-				"inspect", "--config", "docker://"+image)
-			if err != nil {
-				return fmt.Errorf("inspect image %s for %s/%s: %w", image, want.OS, want.Architecture, err)
-			}
-			var actual platform
-			if json.Unmarshal(data, &actual) != nil || actual != want {
-				return fmt.Errorf("image %s does not supply %s/%s", image, want.OS, want.Architecture)
+			if err := inspectPlatform(ctx, h.config.Podman, image, want, run); err != nil {
+				return err
 			}
 		}
 	}
-	toolVersion, err := run(ctx, h.config.Skopeo, "--version")
-	if err != nil {
-		return err
-	}
 	return h.writeJSON("platforms.json", map[string]any{"platforms": platforms, "images": images,
-		"skopeoVersion": strings.TrimSpace(string(toolVersion))})
+		"podmanVersion": strings.TrimSpace(string(toolVersion))})
+}
+
+func inspectPlatform(ctx context.Context, podman, image string, want platform, run commandFunc) error {
+	target := want.OS + "/" + want.Architecture
+	data, err := run(ctx, podman, podmanPull, "--quiet", "--policy=always", "--platform", target, image)
+	if err != nil {
+		return fmt.Errorf("pull image %s for %s: %w", image, target, err)
+	}
+	// Inspect the returned ID: pulling another platform can change the local
+	// image associated with the same registry reference. Never trust only the
+	// requested platform; a single-image manifest can contain a different one.
+	id := strings.TrimSpace(string(data))
+	decoded, err := hex.DecodeString(strings.TrimPrefix(id, "sha256:"))
+	if err != nil || len(decoded) != 32 {
+		return fmt.Errorf("pull image %s for %s did not return a full image ID", image, target)
+	}
+	data, err = run(ctx, podman, "image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", id)
+	if err != nil {
+		return fmt.Errorf("inspect image %s for %s: %w", image, target, err)
+	}
+	if strings.TrimSpace(string(data)) != target {
+		return fmt.Errorf("image %s does not supply %s", image, target)
+	}
+	return nil
 }

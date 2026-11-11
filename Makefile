@@ -9,11 +9,15 @@ VERSION ?= 0.0.1
 # This is useful for CI or a project to utilize a specific version of the operator-sdk toolkit.
 OPERATOR_SDK_VERSION ?= v1.42.3
 
+# Match go.mod and the pinned tools. Environment and command-line overrides win.
+export GOTOOLCHAIN ?= go1.26.0
+
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
-ifeq (,$(shell go env GOBIN))
-GOBIN=$(shell go env GOPATH)/bin
+# Pass GOTOOLCHAIN explicitly to $(shell): Make 3.81 does not export it there.
+ifeq (,$(shell GOTOOLCHAIN="$(GOTOOLCHAIN)" go env GOBIN))
+GOBIN=$(shell GOTOOLCHAIN="$(GOTOOLCHAIN)" go env GOPATH)/bin
 else
-GOBIN=$(shell go env GOBIN)
+GOBIN=$(shell GOTOOLCHAIN="$(GOTOOLCHAIN)" go env GOBIN)
 endif
 
 # Container tool (docker or podman)
@@ -86,7 +90,7 @@ install-hooks: ## Install pre-commit hooks.
 	pre-commit install
 
 ##@ Testing
-ENVTEST_K8S_VERSION ?= $(shell go list -m -f "{{ .Version }}" k8s.io/api | awk -F'[v.]' '{printf "1.%d", $$3}')
+ENVTEST_K8S_VERSION ?= $(shell GOTOOLCHAIN="$(GOTOOLCHAIN)" go list -m -f "{{ .Version }}" k8s.io/api | awk -F'[v.]' '{printf "1.%d", $$3}')
 KIND_CLUSTER ?= hyperfleet-operator-test-e2e
 
 # TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
@@ -128,8 +132,8 @@ cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 # Prepared-cluster OLM tests consume published artifacts. They must not invoke
 # setup-test-e2e, build a replacement manager, or install locally generated CRDs.
 # The build tag keeps live execution out of ordinary unit tests and make test.
-export KUBECONFIG UPGRADE_CATALOG UPGRADE_FROM_BUNDLE UPGRADE_TO_BUNDLE UPGRADE_CHANNEL
-export UPGRADE_SCENARIO UPGRADE_NAMESPACE UPGRADE_TIMEOUT UPGRADE_RETAIN_ON_SUCCESS OPM SKOPEO ARTIFACT_DIR
+export KUBECONFIG OLM_CATALOG_IMAGE UPGRADE_FROM_BUNDLE UPGRADE_TO_BUNDLE OLM_CHANNEL
+export UPGRADE_SCENARIO UPGRADE_NAMESPACE UPGRADE_TIMEOUT UPGRADE_RETAIN_ON_SUCCESS OPM PODMAN ARTIFACT_DIR
 
 .PHONY: test-e2e-upgrade
 test-e2e-upgrade: opm ## Test a published N-1 -> N OLM Classic upgrade on a prepared isolated cluster.
@@ -478,7 +482,7 @@ ifeq (, $(shell which operator-sdk 2>/dev/null))
 	@{ \
 	set -e ;\
 	mkdir -p $(dir $(OPERATOR_SDK)) ;\
-	OS=$(shell go env GOOS) && ARCH=$(shell go env GOARCH) && \
+	OS=$(shell GOTOOLCHAIN="$(GOTOOLCHAIN)" go env GOOS) && ARCH=$(shell GOTOOLCHAIN="$(GOTOOLCHAIN)" go env GOARCH) && \
 	curl -sSLo $(OPERATOR_SDK) https://github.com/operator-framework/operator-sdk/releases/download/$(OPERATOR_SDK_VERSION)/operator-sdk_$${OS}_$${ARCH} ;\
 	chmod +x $(OPERATOR_SDK) ;\
 	}
@@ -491,7 +495,7 @@ endif
 .PHONY: opm
 OPM = $(LOCALBIN)/opm
 OPM_VERSION ?= v1.55.0
-OPM_PLATFORM = $(shell go env GOOS)-$(shell go env GOARCH)
+OPM_PLATFORM = $(shell GOTOOLCHAIN="$(GOTOOLCHAIN)" go env GOOS)-$(shell GOTOOLCHAIN="$(GOTOOLCHAIN)" go env GOARCH)
 # sha256 of the $(OPM_VERSION) release binaries, from the release's checksums.txt
 OPM_SHA256_linux-amd64 := eed05ce8d6c21bb4acf4683f270ea7fd69ecf492cb58459c5689575c80800921
 OPM_SHA256_linux-arm64 := 4048b965d25a96bdaca5c2ca4e45418ba286391f960708e774760c7abfa509ad

@@ -10,6 +10,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -28,11 +29,12 @@ type hfcStatus struct {
 	Components         []componentStatus  `json:"components,omitempty"`
 }
 type observation struct {
-	At              time.Time `json:"at"`
-	UID             types.UID `json:"uid"`
-	Generation      int64     `json:"generation"`
-	ResourceVersion string    `json:"resourceVersion"`
-	Status          hfcStatus `json:"status"`
+	At              time.Time        `json:"at"`
+	UID             types.UID        `json:"uid"`
+	Generation      int64            `json:"generation"`
+	ResourceVersion string           `json:"resourceVersion"`
+	Status          hfcStatus        `json:"status"`
+	Resync          *conditionResync `json:"resync,omitempty"`
 }
 
 func observe(obj *unstructured.Unstructured) (observation, error) {
@@ -64,23 +66,25 @@ type history struct {
 	err          error
 	cancel       context.CancelFunc
 	done         chan struct{}
+	listTimeout  time.Duration
 }
 
 // startHistory establishes the initial watch before the InstallPlan is approved.
-// Reconnects resume at the last resourceVersion. No relist can erase a gap: a
-// watch error (including expired resourceVersion) fails the evidence check.
+// Reconnects resume at the last resourceVersion. Expiry requires a fresh snapshot
+// and an explicit gap marker; previous observations and failures are preserved.
 func startHistory(ctx context.Context, client dynamic.Interface,
-	baseline *unstructured.Unstructured) (*history, error) {
+	baseline *unstructured.Unstructured, listTimeout time.Duration) (*history, error) {
 	initial, err := observe(baseline)
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	h := &history{observations: []observation{initial}, cancel: cancel, done: make(chan struct{})}
+	h := &history{observations: []observation{initial}, cancel: cancel, done: make(chan struct{}),
+		listTimeout: listTimeout}
 	options := metav1.ListOptions{FieldSelector: "metadata.name=" + hfcName,
 		ResourceVersion:     baseline.GetResourceVersion(),
 		AllowWatchBookmarks: true, TimeoutSeconds: ptr.To[int64](60)}
-	stream, err := client.Resource(hfcResource).Watch(ctx, options)
+	stream, err := h.openWatch(ctx, client, &options, false)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -106,16 +110,34 @@ func (h *history) read(ctx context.Context, client dynamic.Interface, stream wat
 				if !waitForWatchReconnect(ctx) {
 					return
 				}
-				next, err := client.Resource(hfcResource).Watch(ctx, options)
+				next, err := h.openWatch(ctx, client, &options, false)
 				if err != nil {
-					h.fail(fmt.Errorf("condition history reconnect failed"))
+					if ctx.Err() == nil {
+						h.fail(err)
+					}
 					return
 				}
 				stream = next
 				continue
 			}
-			if event.Type == watch.Error || event.Type == watch.Deleted {
-				h.fail(fmt.Errorf("condition history lost or HyperFleetConfig deleted"))
+			if event.Type == watch.Error {
+				if !expiredWatch(apierrors.FromObject(event.Object)) {
+					h.fail(fmt.Errorf("condition history watch failed"))
+					return
+				}
+				stream.Stop()
+				next, err := h.openWatch(ctx, client, &options, true)
+				if err != nil {
+					if ctx.Err() == nil {
+						h.fail(err)
+					}
+					return
+				}
+				stream = next
+				continue
+			}
+			if event.Type == watch.Deleted {
+				h.fail(fmt.Errorf("HyperFleetConfig deleted during condition history"))
 				return
 			}
 			obj, ok := event.Object.(*unstructured.Unstructured)
@@ -127,19 +149,10 @@ func (h *history) read(ctx context.Context, client dynamic.Interface, stream wat
 			if event.Type == watch.Bookmark {
 				continue
 			}
-			observation, err := observe(obj)
-			if err != nil {
+			if err := h.record(obj, nil); err != nil {
 				h.fail(err)
 				return
 			}
-			h.mu.Lock()
-			if len(h.observations) >= 10000 {
-				h.err = fmt.Errorf("condition history exceeded bounded capacity")
-				h.mu.Unlock()
-				return
-			}
-			h.observations = append(h.observations, observation)
-			h.mu.Unlock()
 		}
 	}
 }

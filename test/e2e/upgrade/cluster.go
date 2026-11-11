@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	operatorsv1 "github.com/operator-framework/api/pkg/operators/v1"
+	operatorsv1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -43,7 +45,7 @@ var (
 )
 
 func olmResource(name string) schema.GroupVersionResource {
-	return schema.GroupVersionResource{Group: "operators.coreos.com", Version: "v1alpha1", Resource: name}
+	return operatorsv1alpha1.SchemeGroupVersion.WithResource(name)
 }
 
 type clients struct {
@@ -146,18 +148,23 @@ func (h *harness) createOLM(ctx context.Context) error {
 	ns := h.config.Namespace
 	items := []struct {
 		resource schema.GroupVersionResource
-		object   *unstructured.Unstructured
+		object   runtime.Object
 	}{
-		{catalogResource, object(olmAPIVersion, "CatalogSource", catalogName, ns,
-			map[string]any{"sourceType": "grpc", fieldImage: h.config.Catalog,
-				"displayName": "HyperFleet upgrade test"})},
-		{schema.GroupVersionResource{Group: "operators.coreos.com", Version: "v1", Resource: "operatorgroups"},
-			object(operatorGroupAPIVersion, "OperatorGroup", "upgrade", ns, map[string]any{})},
+		{catalogResource, &operatorsv1alpha1.CatalogSource{
+			TypeMeta: metav1.TypeMeta{APIVersion: operatorsv1alpha1.CatalogSourceCRDAPIVersion,
+				Kind: operatorsv1alpha1.CatalogSourceKind},
+			ObjectMeta: metav1.ObjectMeta{Name: catalogName, Namespace: ns},
+			Spec: operatorsv1alpha1.CatalogSourceSpec{SourceType: operatorsv1alpha1.SourceTypeGrpc,
+				Image: h.config.Catalog, DisplayName: "HyperFleet upgrade test"},
+		}},
+		{operatorsv1.SchemeGroupVersion.WithResource("operatorgroups"), &operatorsv1.OperatorGroup{
+			TypeMeta: metav1.TypeMeta{APIVersion: operatorsv1.SchemeGroupVersion.String(),
+				Kind: operatorsv1.OperatorGroupKind},
+			ObjectMeta: metav1.ObjectMeta{Name: "upgrade", Namespace: ns},
+		}},
 	}
 	for _, item := range items {
-		item.object.SetLabels(map[string]string{runLabel: h.state.RunID})
-		created, err := h.clients.dynamic.Resource(item.resource).Namespace(ns).Create(ctx, item.object,
-			metav1.CreateOptions{})
+		created, err := h.createOLMResource(ctx, item.resource, item.object)
 		if err != nil {
 			return err
 		}
@@ -178,11 +185,16 @@ func (h *harness) createOLM(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
-	sub := object(olmAPIVersion, subscriptionKind, subscriptionName, ns, map[string]any{
-		fieldName: packageName, fieldChannel: h.config.Channel, fieldSource: catalogName, fieldSourceNamespace: ns,
-		fieldStartingCSV: h.pair.From.CSV.Metadata.Name, fieldInstallPlanApproval: approvalManual})
-	sub.SetLabels(map[string]string{runLabel: h.state.RunID})
-	created, err := h.clients.dynamic.Resource(subResource).Namespace(ns).Create(ctx, sub, metav1.CreateOptions{})
+	sub := &operatorsv1alpha1.Subscription{
+		TypeMeta: metav1.TypeMeta{APIVersion: operatorsv1alpha1.SubscriptionCRDAPIVersion,
+			Kind: operatorsv1alpha1.SubscriptionKind},
+		ObjectMeta: metav1.ObjectMeta{Name: subscriptionName, Namespace: ns},
+		Spec: &operatorsv1alpha1.SubscriptionSpec{
+			Package: packageName, Channel: h.config.Channel, CatalogSource: catalogName, CatalogSourceNamespace: ns,
+			StartingCSV: h.pair.From.CSV.Name, InstallPlanApproval: operatorsv1alpha1.ApprovalManual,
+		},
+	}
+	created, err := h.createOLMResource(ctx, subResource, sub)
 	if err != nil {
 		return err
 	}
@@ -191,41 +203,60 @@ func (h *harness) createOLM(ctx context.Context) error {
 	return h.saveState()
 }
 
+// Use the official OLM schema for construction while keeping the shared dynamic
+// transport and its no-retry behavior for ambiguous creation responses.
+func (h *harness) createOLMResource(ctx context.Context, gvr schema.GroupVersionResource,
+	obj runtime.Object) (*unstructured.Unstructured, error) {
+	data, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
+	if err != nil {
+		return nil, err
+	}
+	resource := &unstructured.Unstructured{Object: data}
+	resource.SetLabels(map[string]string{runLabel: h.state.RunID})
+	return h.resource(gvr).Create(ctx, resource, metav1.CreateOptions{})
+}
+
 // planForApproval validates the exact plan referred to by our Subscription. A
 // broad list-and-approve can accidentally approve the pending N plan at baseline.
 func planForApproval(plan *unstructured.Unstructured, subUID types.UID, csv, namespace string) error {
-	if plan.GetNamespace() != namespace {
+	typed, err := fromUnstructured[operatorsv1alpha1.InstallPlan](plan)
+	if err != nil {
+		return fmt.Errorf("malformed InstallPlan")
+	}
+	if err = planSelectsCSV(&typed, subUID, csv, namespace); err != nil {
+		return err
+	}
+	if typed.Spec.Approved || typed.Spec.Approval != operatorsv1alpha1.ApprovalManual ||
+		typed.Status.Phase != operatorsv1alpha1.InstallPlanPhaseRequiresApproval {
+		return fmt.Errorf("InstallPlan must be unapproved and RequiresApproval with Manual approval")
+	}
+	return nil
+}
+
+func planSelectsCSV(typed *operatorsv1alpha1.InstallPlan, subUID types.UID, csv, namespace string) error {
+	if typed.Namespace != namespace {
 		return fmt.Errorf("InstallPlan namespace differs from Subscription")
 	}
-	names, _, err := unstructured.NestedStringSlice(plan.Object, fieldSpec, "clusterServiceVersionNames")
-	if err != nil || !slices.Equal(names, []string{csv}) {
+	if !slices.Equal(typed.Spec.ClusterServiceVersionNames, []string{csv}) {
 		return fmt.Errorf("InstallPlan does not select exactly %s", csv)
 	}
 	owned := false
-	for _, owner := range plan.GetOwnerReferences() {
+	for _, owner := range typed.OwnerReferences {
 		owned = owned || owner.Kind == subscriptionKind && owner.UID == subUID
 	}
 	if !owned {
 		return fmt.Errorf("InstallPlan is not owned by this Subscription")
 	}
-	approved, _, _ := unstructured.NestedBool(plan.Object, fieldSpec, "approved")
-	if approved || stringField(plan, fieldSpec, "approval") != approvalManual || stringField(plan,
-		"status", fieldPhase) != "RequiresApproval" {
-		return fmt.Errorf("InstallPlan must be unapproved and RequiresApproval with Manual approval")
-	}
-	steps, _, _ := unstructured.NestedSlice(plan.Object, "status", "plan")
 	found := false
-	for _, entry := range steps {
-		step, ok := entry.(map[string]any)
-		if !ok {
+	for _, step := range typed.Status.Plan {
+		if step == nil {
 			return fmt.Errorf("malformed InstallPlan step")
 		}
-		resource, _, _ := unstructured.NestedMap(step, "resource")
-		if resource[fieldKind] != csvKind {
+		resource := step.Resource
+		if resource.Kind != csvKind {
 			continue
 		}
-		if resource[fieldName] != csv || resource["sourceName"] != catalogName ||
-			resource[fieldSourceNamespace] != namespace {
+		if resource.Name != csv || resource.CatalogSource != catalogName || resource.CatalogSourceNamespace != namespace {
 			return fmt.Errorf("InstallPlan CSV or catalog source differs from selected release")
 		}
 		found = true
@@ -238,7 +269,7 @@ func planForApproval(plan *unstructured.Unstructured, subUID types.UID, csv, nam
 
 func (h *harness) approve(ctx context.Context, r release, previousPlan string) (string, error) {
 	var approvedName string
-	err := h.poll(ctx, "resolve InstallPlan for "+r.CSV.Metadata.Name, func(ctx context.Context) (bool, error) {
+	err := h.poll(ctx, "resolve InstallPlan for "+r.CSV.Name, func(ctx context.Context) (bool, error) {
 		sub, err := h.resource(subResource).Get(ctx, subscriptionName, metav1.GetOptions{})
 		if err != nil {
 			return false, err
@@ -264,7 +295,7 @@ func (h *harness) approve(ctx context.Context, r release, previousPlan string) (
 		if phase == "" || phase == "Planning" {
 			return false, nil
 		}
-		if err = planForApproval(plan, h.subscriptionUID, r.CSV.Metadata.Name, h.config.Namespace); err != nil {
+		if err = planForApproval(plan, h.subscriptionUID, r.CSV.Name, h.config.Namespace); err != nil {
 			return false, err
 		}
 		// JSON Patch tests protect against both replacement and concurrent edits.
@@ -273,9 +304,9 @@ func (h *harness) approve(ctx context.Context, r release, previousPlan string) (
 			{"op": "test", fieldPath: "/metadata/resourceVersion", fieldValue: plan.GetResourceVersion()},
 			{"op": "replace", fieldPath: "/spec/approved", fieldValue: true},
 		})
-		// Record intent before sending a mutation whose response could be lost.
-		h.state.Approved = true
-		if err = h.saveState(); err != nil {
+		// Save the exact plan and an absent-CSV checkpoint before a response
+		// can be lost. Recovery must not infer CSV ownership from its name alone.
+		if err = h.recordCSVApproval(ctx, plan, r.CSV.Name); err != nil {
 			return false, err
 		}
 		_, err = h.resource(planResource).Patch(ctx, name, types.JSONPatchType, patch, metav1.PatchOptions{})
@@ -300,7 +331,7 @@ func validatePlanReference(sub, plan *unstructured.Unstructured) error {
 func (h *harness) validateSubscription(ctx context.Context, sub *unstructured.Unstructured) error {
 	for key, want := range map[string]string{fieldName: packageName, fieldChannel: h.config.Channel,
 		fieldSource: catalogName, fieldSourceNamespace: h.config.Namespace, fieldInstallPlanApproval: approvalManual,
-		fieldStartingCSV: h.pair.From.CSV.Metadata.Name} {
+		fieldStartingCSV: h.pair.From.CSV.Name} {
 		if stringField(sub, fieldSpec, key) != want {
 			return fmt.Errorf("subscription %s changed during the test", key)
 		}
@@ -316,13 +347,13 @@ func (h *harness) validateSubscription(ctx context.Context, sub *unstructured.Un
 }
 
 func (h *harness) waitInstalled(ctx context.Context, r release, planName string) error {
-	return h.poll(ctx, "install "+r.CSV.Metadata.Name, func(ctx context.Context) (bool, error) {
+	return h.poll(ctx, "install "+r.CSV.Name, func(ctx context.Context) (bool, error) {
 		plan, err := h.resource(planResource).Get(ctx, planName, metav1.GetOptions{})
 		if err != nil {
 			return false, err
 		}
 		phase := stringField(plan, "status", fieldPhase)
-		csv, err := h.resource(csvResource).Get(ctx, r.CSV.Metadata.Name, metav1.GetOptions{})
+		csv, err := h.resource(csvResource).Get(ctx, r.CSV.Name, metav1.GetOptions{})
 		if apierrors.IsNotFound(err) {
 			if phase == phaseFailed {
 				return false, fmt.Errorf("InstallPlan %s failed", planName)
@@ -354,7 +385,7 @@ func (h *harness) waitInstalled(ctx context.Context, r release, planName string)
 		if sub.GetUID() != h.subscriptionUID {
 			return false, fmt.Errorf("subscription was replaced during installation")
 		}
-		if stringField(sub, "status", "installedCSV") != r.CSV.Metadata.Name {
+		if stringField(sub, "status", "installedCSV") != r.CSV.Name {
 			return false, nil
 		}
 		if err = h.validateSubscription(ctx, sub); err != nil {
@@ -363,7 +394,7 @@ func (h *harness) waitInstalled(ctx context.Context, r release, planName string)
 		if err = validateInstalledCSV(csv, r); err != nil {
 			return false, err
 		}
-		for _, expected := range r.CSV.Spec.Install.Spec.Deployments {
+		for _, expected := range r.CSV.Spec.InstallStrategy.StrategySpec.DeploymentSpecs {
 			dep, err := h.clients.kube.AppsV1().Deployments(h.config.Namespace).Get(ctx, expected.Name,
 				metav1.GetOptions{})
 			if err != nil {
@@ -414,11 +445,11 @@ func validateInstalledCSV(csv *unstructured.Unstructured, r release) error {
 	if err != nil {
 		return err
 	}
-	var installed csvDocument
-	if err = json.Unmarshal(data, &installed); err != nil {
+	installed, err := decodeCSV(data)
+	if err != nil {
 		return err
 	}
-	if installed.Spec.Version != r.CSV.Spec.Version {
+	if installed.Spec.Version.String() != r.CSV.Spec.Version.String() {
 		return fmt.Errorf("installed CSV version differs from bundle")
 	}
 	actual := release{CSV: installed, Images: map[string]string{}}

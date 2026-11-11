@@ -78,7 +78,7 @@ func Run(ctx context.Context, c Config) (result error) {
 	}
 	h := &harness{config: c, clients: client, pair: pair,
 		state: receipt{RunID: "upgrade-" + hex.EncodeToString(random[:]),
-			Namespace: c.Namespace, CSVs: []string{pair.From.CSV.Metadata.Name, pair.To.CSV.Metadata.Name}}}
+			Namespace: c.Namespace, CSVs: []string{pair.From.CSV.Name, pair.To.CSV.Name}}}
 	defer func() { result = h.finish(result, retain) }()
 	// Record the no-mutations state before platform checks can fail. Recovery
 	// can then distinguish an early failure from a missing or lost receipt.
@@ -87,7 +87,7 @@ func Run(ctx context.Context, c Config) (result error) {
 	}
 	if err = h.writeJSON("run.json", map[string]any{"runID": h.state.RunID, "catalog": c.Catalog,
 		"fromBundle": c.FromBundle, "toBundle": c.ToBundle, fieldChannel: c.Channel, fieldNamespace: c.Namespace,
-		"fromCSV": pair.From.CSV.Metadata.Name, "toCSV": pair.To.CSV.Metadata.Name,
+		"fromCSV": pair.From.CSV.Name, "toCSV": pair.To.CSV.Name,
 		"fromImages": pair.From.Images, "toImages": pair.To.Images,
 		"opmVersion": pair.OPMVersion, "goVersion": runtime.Version(),
 		"fromComponents": c.Scenario.From, "toComponents": c.Scenario.To}); err != nil {
@@ -155,7 +155,7 @@ func (h *harness) upgrade(ctx context.Context, initialPlan string, before map[st
 	if err != nil {
 		return err
 	}
-	h.history, err = startHistory(ctx, h.clients.watches, baseline)
+	h.history, err = startHistory(ctx, h.clients.watches, baseline, h.config.Timeout)
 	if err != nil {
 		return err
 	}
@@ -181,9 +181,9 @@ func (h *harness) upgrade(ctx context.Context, initialPlan string, before map[st
 		return err
 	}
 	// Allow the watch consumer to catch up to the final GET. Require its own
-	// complete transition evidence; a healthy GET alone cannot satisfy this test.
+	// observed False -> True -> False sequence; a healthy GET alone cannot pass.
 	var evidenceErr error
-	if err = h.poll(ctx, "complete upgrade condition history", func(ctx context.Context) (bool, error) {
+	if err = h.poll(ctx, "upgrade condition transition evidence", func(ctx context.Context) (bool, error) {
 		current, readErr := h.clients.dynamic.Resource(hfcResource).Get(ctx, hfcName, metav1.GetOptions{})
 		if readErr != nil {
 			return false, readErr

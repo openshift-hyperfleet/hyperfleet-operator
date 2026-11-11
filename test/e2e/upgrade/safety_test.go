@@ -50,7 +50,7 @@ func TestWatchReconnectPreservesResourceVersion(t *testing.T) {
 			}
 			return true, second, nil
 		})
-	history, err := startHistory(t.Context(), h.clients.dynamic, baseline)
+	history, err := startHistory(t.Context(), h.clients.dynamic, baseline, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestWatchReconnectFailureIsReported(t *testing.T) {
 			}
 			return true, nil, errors.New("connection lost")
 		})
-	history, err := startHistory(t.Context(), h.clients.dynamic, baseline)
+	history, err := startHistory(t.Context(), h.clients.dynamic, baseline, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +387,7 @@ func TestUnavailableAPIDoesNotPreventKubernetesCleanup(t *testing.T) {
 	}
 }
 
-func TestWatchExpiryInvalidatesEvidence(t *testing.T) {
+func TestNonExpiryWatchErrorInvalidatesEvidence(t *testing.T) {
 	baseline := object("hyperfleet.redhat.com/v1alpha1", "HyperFleetConfig", hfcName, "", map[string]any{})
 	baseline.SetUID(types.UID("hfc"))
 	baseline.SetResourceVersion("10")
@@ -395,19 +395,19 @@ func TestWatchExpiryInvalidatesEvidence(t *testing.T) {
 	stream := watch.NewRaceFreeFake()
 	h.clients.dynamic.(*dynamicfake.FakeDynamicClient).PrependWatchReactor("hyperfleetconfigs",
 		func(clienttesting.Action) (bool, watch.Interface, error) { return true, stream, nil })
-	history, err := startHistory(t.Context(), h.clients.dynamic, baseline)
+	history, err := startHistory(t.Context(), h.clients.dynamic, baseline, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer history.stop()
-	stream.Error(&metav1.Status{Code: 410, Reason: metav1.StatusReasonExpired})
+	stream.Error(&metav1.Status{Code: 403, Reason: metav1.StatusReasonForbidden})
 	select {
 	case <-history.done:
 	case <-time.After(time.Second):
-		t.Fatal("expired watch did not fail")
+		t.Fatal("forbidden watch did not fail")
 	}
 	if _, err = history.snapshot(); err == nil {
-		t.Fatal("expired history accepted")
+		t.Fatal("forbidden history accepted")
 	}
 }
 
@@ -441,7 +441,7 @@ func TestClosedHistoryWatchesBackOffAndCancel(t *testing.T) {
 			} else {
 				baseline := object("hyperfleet.redhat.com/v1alpha1", "HyperFleetConfig", hfcName, "", nil)
 				baseline.SetResourceVersion("10")
-				history, err := startHistory(ctx, dyn, baseline)
+				history, err := startHistory(ctx, dyn, baseline, time.Second)
 				if err != nil {
 					t.Fatal(err)
 				}

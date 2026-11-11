@@ -26,24 +26,25 @@ import (
 // receipt contains identities only, never kubeconfig/Secret data. UID
 // preconditions prevent a later cleanup from deleting replacement resources.
 type receipt struct {
-	RunID            string               `json:"runID"`
-	ClusterUID       types.UID            `json:"clusterUID"`
-	Namespace        string               `json:"namespace"`
-	NamespaceUID     types.UID            `json:"namespaceUID,omitempty"`
-	NamespacePending bool                 `json:"namespacePending,omitempty"`
-	SubscriptionUID  types.UID            `json:"subscriptionUID,omitempty"`
-	CatalogUID       types.UID            `json:"catalogUID,omitempty"`
-	LeaseUID         types.UID            `json:"leaseUID,omitempty"`
-	LeasePending     bool                 `json:"leasePending,omitempty"`
-	HFCUID           types.UID            `json:"hfcUID,omitempty"`
-	CRDUID           types.UID            `json:"crdUID,omitempty"`
-	CSVs             []string             `json:"csvs"`
-	CSVUIDs          map[string]types.UID `json:"csvUIDs,omitempty"`
-	Approved         bool                 `json:"approved"`
-	Cleaned          bool                 `json:"cleaned"`
-	ProbeID          string               `json:"probeID,omitempty"`
-	ProbePending     bool                 `json:"probePending,omitempty"`
-	Probe            ProbeConfig          `json:"probe,omitempty"`
+	RunID            string                 `json:"runID"`
+	ClusterUID       types.UID              `json:"clusterUID"`
+	Namespace        string                 `json:"namespace"`
+	NamespaceUID     types.UID              `json:"namespaceUID,omitempty"`
+	NamespacePending bool                   `json:"namespacePending,omitempty"`
+	SubscriptionUID  types.UID              `json:"subscriptionUID,omitempty"`
+	CatalogUID       types.UID              `json:"catalogUID,omitempty"`
+	LeaseUID         types.UID              `json:"leaseUID,omitempty"`
+	LeasePending     bool                   `json:"leasePending,omitempty"`
+	HFCUID           types.UID              `json:"hfcUID,omitempty"`
+	CRDUID           types.UID              `json:"crdUID,omitempty"`
+	CSVs             []string               `json:"csvs"`
+	CSVUIDs          map[string]types.UID   `json:"csvUIDs,omitempty"`
+	CSVApprovals     map[string]csvApproval `json:"csvApprovals,omitempty"`
+	Approved         bool                   `json:"approved"`
+	Cleaned          bool                   `json:"cleaned"`
+	ProbeID          string                 `json:"probeID,omitempty"`
+	ProbePending     bool                   `json:"probePending,omitempty"`
+	Probe            ProbeConfig            `json:"probe,omitempty"`
 }
 
 var fixtureResources = map[string]schema.GroupVersionResource{
@@ -199,7 +200,7 @@ func (h *harness) isOperandName(name string) bool {
 		}
 	}
 	for _, r := range []release{h.pair.From, h.pair.To} {
-		for _, d := range r.CSV.Spec.Install.Spec.Deployments {
+		for _, d := range r.CSV.Spec.InstallStrategy.StrategySpec.DeploymentSpecs {
 			if d.Name == name {
 				return true
 			}
@@ -388,7 +389,13 @@ func (h *harness) cleanupHFC(ctx context.Context) error {
 			return err
 		}
 	}
-	err = h.clients.dynamic.Resource(hfcResource).Delete(ctx, hfcName, uidDelete(h.state.HFCUID))
+	// Published operators may still reconcile a terminating HFC and recreate
+	// dependents, preventing foreground deletion from completing. Remove the
+	// owner with background propagation; namespace teardown below waits for all
+	// namespaced resources to disappear before the run's Lease is released.
+	options := uidDelete(h.state.HFCUID)
+	options.PropagationPolicy = ptr.To(metav1.DeletePropagationBackground)
+	err = h.clients.dynamic.Resource(hfcResource).Delete(ctx, hfcName, options)
 	if ignoreNotFound(err) != nil {
 		return err
 	}
@@ -398,6 +405,7 @@ func (h *harness) cleanupHFC(ctx context.Context) error {
 func (h *harness) cleanupOLM(ctx context.Context) error {
 	// Stop subscription reconciliation before deleting its CSVs.
 	sub, err := h.resource(subResource).Get(ctx, subscriptionName, metav1.GetOptions{})
+	subPresent := err == nil
 	if err == nil {
 		if sub.GetLabels()[runLabel] != h.state.RunID ||
 			(h.state.SubscriptionUID != "" && sub.GetUID() != h.state.SubscriptionUID) {
@@ -407,12 +415,19 @@ func (h *harness) cleanupOLM(ctx context.Context) error {
 		if err = h.saveState(); err != nil {
 			return err
 		}
+	} else if !apierrors.IsNotFound(err) {
+		return err
+	}
+	// Recover before deleting the Subscription or its plans: garbage collection
+	// could otherwise erase the evidence needed to identify an unrecorded CSV.
+	if err = h.recoverCSVUIDs(ctx); err != nil {
+		return err
+	}
+	if subPresent {
 		err = h.resource(subResource).Delete(ctx, subscriptionName, uidDelete(sub.GetUID()))
 		if ignoreNotFound(err) != nil {
 			return err
 		}
-	} else if !apierrors.IsNotFound(err) {
-		return err
 	}
 	// An approved InstallPlan can continue installing after its Subscription is
 	// deleted. Cancel owned plans before deleting CSVs or capturing a partial CRD.
@@ -526,7 +541,8 @@ func Cleanup(ctx context.Context, kubeconfig, artifactDir string) error {
 	if state.ClusterUID == "" {
 		if state.LeaseUID != "" || state.LeasePending || state.NamespaceUID != "" || state.NamespacePending ||
 			state.Approved || state.HFCUID != "" || state.CRDUID != "" || state.SubscriptionUID != "" ||
-			state.CatalogUID != "" || len(state.CSVUIDs) != 0 || state.ProbeID != "" || state.ProbePending {
+			state.CatalogUID != "" || len(state.CSVUIDs) != 0 || len(state.CSVApprovals) != 0 ||
+			state.ProbeID != "" || state.ProbePending {
 			return fmt.Errorf("invalid cleanup receipt: resources recorded without cluster identity")
 		}
 		return nil

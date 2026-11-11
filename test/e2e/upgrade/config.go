@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/distribution/reference"
+	operatorsv1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -31,7 +32,7 @@ const (
 // Config identifies immutable artifacts and an explicitly selected cluster.
 type Config struct {
 	Kubeconfig, Catalog, FromBundle, ToBundle, Channel, Namespace, ArtifactDir, OPM string
-	Skopeo                                                                          string
+	Podman                                                                          string
 	Timeout, PollInterval                                                           time.Duration
 	Scenario                                                                        Scenario
 }
@@ -118,9 +119,9 @@ func LoadConfig() (Config, error) {
 	if c.OPM == "" {
 		c.OPM = "opm"
 	}
-	c.Skopeo = os.Getenv("SKOPEO")
-	if c.Skopeo == "" {
-		c.Skopeo = "skopeo"
+	c.Podman = os.Getenv("PODMAN")
+	if c.Podman == "" {
+		c.Podman = "podman"
 	}
 	if c.Namespace == "" {
 		c.Namespace = "hyperfleet-upgrade"
@@ -337,9 +338,9 @@ func podImages(spec corev1.PodSpec) []corev1.Container {
 // Shared OLM and JSON field names used in dynamic resource contracts.
 const (
 	bundleSchema         = "olm.bundle"
-	csvKind              = "ClusterServiceVersion"
-	subscriptionKind     = "Subscription"
-	approvalManual       = "Manual"
+	csvKind              = operatorsv1alpha1.ClusterServiceVersionKind
+	subscriptionKind     = operatorsv1alpha1.SubscriptionKind
+	approvalManual       = string(operatorsv1alpha1.ApprovalManual)
 	phaseFailed          = "Failed"
 	apiComponentName     = "api"
 	fieldKind            = "kind"
@@ -360,25 +361,24 @@ const (
 
 const (
 	kubeconfigEnv   = "KUBECONFIG"
-	channelEnv      = "UPGRADE_CHANNEL"
-	catalogEnv      = "UPGRADE_CATALOG"
+	channelEnv      = "OLM_CHANNEL"
+	catalogEnv      = "OLM_CATALOG_IMAGE"
 	fromBundleEnv   = "UPGRADE_FROM_BUNDLE"
 	systemNamespace = "kube-system"
 )
 
 // Test-runner inputs and fixed mutation keys are shared by execution and recovery.
 const (
-	toBundleEnv             = "UPGRADE_TO_BUNDLE"
-	namespaceEnv            = "UPGRADE_NAMESPACE"
-	artifactDirEnv          = "ARTIFACT_DIR"
-	scenarioEnv             = "UPGRADE_SCENARIO"
-	timeoutEnv              = "UPGRADE_TIMEOUT"
-	retainEnv               = "UPGRADE_RETAIN_ON_SUCCESS"
-	cleanupOnlyEnv          = "UPGRADE_CLEANUP_ONLY"
-	olmAPIVersion           = "operators.coreos.com/v1alpha1"
-	operatorGroupAPIVersion = "operators.coreos.com/v1"
-	noopAnnotation          = "hyperfleet.redhat.com/upgrade-noop"
-	hashProbeAnnotation     = "hyperfleet.redhat.com/upgrade-hash-probe"
+	toBundleEnv         = "UPGRADE_TO_BUNDLE"
+	namespaceEnv        = "UPGRADE_NAMESPACE"
+	artifactDirEnv      = "ARTIFACT_DIR"
+	scenarioEnv         = "UPGRADE_SCENARIO"
+	timeoutEnv          = "UPGRADE_TIMEOUT"
+	retainEnv           = "UPGRADE_RETAIN_ON_SUCCESS"
+	cleanupOnlyEnv      = "UPGRADE_CLEANUP_ONLY"
+	olmAPIVersion       = operatorsv1alpha1.ClusterServiceVersionAPIVersion
+	noopAnnotation      = "hyperfleet.redhat.com/upgrade-noop"
+	hashProbeAnnotation = "hyperfleet.redhat.com/upgrade-hash-probe"
 )
 
 const (

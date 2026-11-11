@@ -100,11 +100,11 @@ func TestInstalledCSVMatchesImmutableBundle(t *testing.T) {
 		wantError bool
 	}{
 		{"matching", func(*release) {}, false},
-		{"version drift", func(r *release) { r.CSV.Spec.Version = "99.0.0" }, true},
+		{"version drift", func(r *release) { r.CSV.Spec.Version.Major = 99 }, true},
 		{"related image drift", func(r *release) {
 			image := testImage(apiComponentName, "c")
 			r.CSV.Spec.RelatedImages[0].Image = image
-			r.CSV.Spec.Install.Spec.Deployments[0].Spec.Template.Spec.Containers[0].Env[0].Value = image
+			r.CSV.Spec.InstallStrategy.StrategySpec.DeploymentSpecs[0].Spec.Template.Spec.Containers[0].Env[0].Value = image
 		}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -247,34 +247,17 @@ func TestRetriedCreateIsNotADefinitiveRejection(t *testing.T) {
 }
 
 func TestApprovalIntentPrecedesFailedPatch(t *testing.T) {
-	plan := validPlan()
-	plan.SetNamespace(testNamespace)
-	plan.SetUID("plan-uid")
-	plan.SetResourceVersion("1")
-	steps := plan.Object["status"].(map[string]any)["plan"].([]any)
-	steps[0].(map[string]any)["resource"].(map[string]any)[fieldSourceNamespace] = plan.GetNamespace()
-	pair := testPair(t)
-	plan.Object[fieldSpec].(map[string]any)["clusterServiceVersionNames"] = []any{pair.To.CSV.Metadata.Name}
-	steps[0].(map[string]any)["resource"].(map[string]any)[fieldName] = pair.To.CSV.Metadata.Name
-	sub := object(olmAPIVersion, subscriptionKind, subscriptionName, plan.GetNamespace(), map[string]any{
-		fieldName: packageName, fieldChannel: testChannel, fieldSource: catalogName,
-		fieldSourceNamespace: plan.GetNamespace(), fieldStartingCSV: pair.From.CSV.Metadata.Name,
-		fieldInstallPlanApproval: approvalManual})
-	sub.SetUID("subscription-uid")
-	sub.Object["status"] = map[string]any{"installPlanRef": map[string]any{
-		fieldName: plan.GetName(), fieldUID: string(plan.GetUID()), fieldNamespace: plan.GetNamespace()}}
-	catalog := object(olmAPIVersion, "CatalogSource", catalogName, plan.GetNamespace(),
-		map[string]any{fieldImage: testImage("catalog", "e")})
-	catalog.SetUID("catalog-uid")
-	h := fakeHarness(t, sub, plan, catalog)
-	h.pair, h.subscriptionUID, h.state.CatalogUID = pair, sub.GetUID(), catalog.GetUID()
-	h.config.Channel, h.config.Catalog = testChannel, stringField(catalog, fieldSpec, fieldImage)
+	h, plan := csvApprovalHarness(t)
+	pair := h.pair
 	patchErr := errors.New("approval response lost")
 	patched := false
 	h.clients.dynamic.(*dynamicfake.FakeDynamicClient).PrependReactor("patch", "installplans",
 		func(clienttesting.Action) (bool, runtime.Object, error) {
 			patched = true
-			if !savedReceipt(t, h).Approved {
+			intent := savedReceipt(t, h)
+			approval := intent.CSVApprovals[pair.To.CSV.Name]
+			if !intent.Approved || approval.PlanName != plan.GetName() || approval.PlanUID != plan.GetUID() ||
+				approval.CSVResourceVersion != "10" {
 				t.Fatal("approval patch preceded durable intent")
 			}
 			return true, nil, patchErr

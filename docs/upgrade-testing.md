@@ -62,14 +62,14 @@ test-runner permission requirement, not a change to operator RBAC.
 | `KUBECONFIG` | Required explicit kubeconfig file for the isolated cluster. No ambient default is used. |
 | `UPGRADE_FROM_BUNDLE` | Required previous-final bundle image by digest. |
 | `UPGRADE_TO_BUNDLE` | Required target-RC bundle image by digest. |
-| `UPGRADE_CATALOG` | Required aggregate catalog image by digest. |
-| `UPGRADE_CHANNEL` | Required exact channel name; no hardcoded `stable` assumption. |
+| `OLM_CATALOG_IMAGE` | Required aggregate catalog image by digest, shared by both releases. |
+| `OLM_CHANNEL` | Required OLM Subscription channel used for both releases; no hardcoded `stable` assumption. |
 | `UPGRADE_SCENARIO` | Required YAML scenario; relative file paths resolve beside this file. |
 | `ARTIFACT_DIR` | Required unique directory for one run, including `cleanup.json` and JUnit output. |
 | `UPGRADE_NAMESPACE` | Fresh run namespace; default `hyperfleet-upgrade`. |
 | `UPGRADE_TIMEOUT` | Deadline for an individual convergence stage; default `15m`. |
 | `OPM` | Path to the installed `opm` executable; default `opm` on PATH. |
-| `SKOPEO` | Path to `skopeo` for registry/platform preflight; default `skopeo` on PATH. |
+| `PODMAN` | Path to `podman` for registry/platform preflight; default `podman` on PATH. |
 | `UPGRADE_RETAIN_ON_SUCCESS` | Default `false`. Retain only a successful installation for downstream journeys. |
 
 When using the Make targets, relative `KUBECONFIG`, `UPGRADE_SCENARIO` and
@@ -78,22 +78,35 @@ package test. Paths within the scenario remain relative to the scenario file.
 
 Use the repository's pinned Go version. The Make target obtains the repository's
 pinned `opm` in `bin/` if absent; override `OPM` to use an existing executable.
-Direct Go invocation defaults to `opm` on PATH. Install `skopeo` in the runner
-and pin the runner/tool revision in CI. The suite calls `skopeo` during
-preflight and fails before cluster mutation if the executable is missing or
-image inspection fails. `opm render` must emit the
+Direct Go invocation defaults to `opm` on PATH. Install Podman in the runner
+and pin the runner/tool revision in CI. Podman needs working image storage and
+registry access; a Linux CI pod must be configured for nested Podman. Installing
+the binary alone is insufficient. A remote Podman client needs a reachable
+service (on macOS, typically a running Podman machine). The suite checks the CLI
+version first during platform preflight and fails before cluster mutation if
+the executable is missing or image pull/inspection fails. `opm render` must emit the
 unmigrated `olm.bundle.object` properties for bundle CSV inspection. The suite
 uses the installed CLI's normal registry authentication, runs `opm validate`,
 and derives CSV identities and expected images from the immutable bundle images.
 The runner also needs a configured containers/image signature policy accepted by
 that `opm` build; the harness does not change the host's trust policy.
 
-Before creating cluster resources, `skopeo inspect --config` verifies that the
-catalog, operator, related operand images and fixture images are readable and
-provide every schedulable node's Linux architecture. Both CLIs need registry
-authentication configured in their normal credential files. Bundle images are
-metadata, not executable workloads; their content is checked through `opm`.
-Registry inspection does not replace the subsequent cluster image-pull checks.
+Before creating cluster resources, the suite runs `podman pull --quiet
+--policy=always --platform <os>/<arch> <image>` for the catalog, operator,
+related operand images and fixture images on every schedulable node platform.
+It then runs `podman image inspect --format '{{.Os}}/{{.Architecture}}' <image-id>`
+using the full ID returned by that pull and compares the actual OS/architecture.
+Inspecting by ID avoids ambiguity when multiple platforms share a registry
+reference. Both CLIs need registry authentication configured in their normal
+credential files. Bundle images are metadata, not executable workloads; their
+content is checked through `opm`.
+
+This uses Podman in place of a separate Skopeo dependency, at the cost of pulling
+image layers into the runner's Podman storage. Provision sufficient disk and
+stage timeout for those pulls. The suite leaves cached images in place; use
+disposable runner storage or manage it outside the test, without pruning images
+used by other jobs. These pulls do not populate the target cluster nodes' image
+caches or replace the subsequent cluster image-pull checks.
 
 ## Scenario and fixtures
 
@@ -163,7 +176,19 @@ current algorithm's own properties are also tested in
   Kubernetes reported the API available during the observed upgrade. They do
   not prove that every client request succeeded or that there was no
   request-level downtime.
-- **Watch completeness:** Missing or expired history fails the test.
+- **Watch recovery:** An HFC watch expiry (`410 Expired/Gone`), including after
+  an OLM CRD schema update, triggers a fresh singleton LIST and resumes watching
+  from the collection's resourceVersion. The HFC's own resourceVersion may still
+  predate the rebuilt watch cache. Each recovery appends a sanitized observation
+  with a `resync` marker containing the old and new watch checkpoints in
+  `conditions.json`; earlier observations remain intact. Missing, replaced,
+  deleting or spec-changed HFCs and other watch errors fail the test.
+- **Evidence limits:** A resync cannot recover missed condition updates or prove
+  continuous HFC/component conditions across that gap. The observed
+  `Progressing=False → True → False` sequence is still required; a healthy resync
+  does not substitute for a missed `True`, or erase an observed availability
+  failure. Deployment and pod histories remain strict: expiry or lost history
+  fails the test, preserving the independent workload-availability check.
 
 `settleDuration` defaults to `15s` (minimum `5s`). It bounds the no-op annotation
 and post-Secret-update stability observations. These checks do not claim that
@@ -188,20 +213,21 @@ token file valid through cleanup as well as the test.
 After preparing a scenario, fixtures, OLM and the real release artifacts:
 
 ```sh
-GOTOOLCHAIN=go1.26.0 make test-e2e-upgrade \
+make test-e2e-upgrade \
   KUBECONFIG="$UPGRADE_KUBECONFIG" \
   UPGRADE_FROM_BUNDLE="$PREVIOUS_BUNDLE_DIGEST" \
   UPGRADE_TO_BUNDLE="$RC_BUNDLE_DIGEST" \
-  UPGRADE_CATALOG="$RC_CATALOG_DIGEST" \
-  UPGRADE_CHANNEL="$RC_CHANNEL" \
+  OLM_CATALOG_IMAGE="$RC_CATALOG_DIGEST" \
+  OLM_CHANNEL="$RC_CHANNEL" \
   UPGRADE_SCENARIO="$SCENARIO_FILE" \
   ARTIFACT_DIR="$RUN_ARTIFACT_DIR"
 ```
 
-The `GOTOOLCHAIN` prefix selects the Go version pinned by `go.mod`; it is
-explicit here because a newer local Go may not run the pinned tools.
-`UPGRADE_CATALOG` and `UPGRADE_CHANNEL` are inputs to this upgrade test, not
-resources being upgraded. Both releases use the one catalog and one channel.
+Make defaults to `GOTOOLCHAIN=go1.26.0`, matching `go.mod` and the pinned tools.
+An explicit environment or Make command-line value overrides that default.
+`OLM_CATALOG_IMAGE` selects the catalog containing both releases. `OLM_CHANNEL`
+selects the channel containing the direct N−1 → N upgrade edge. The catalog
+and channel remain unchanged throughout the test.
 
 Missing prerequisites fail this target. The live Ginkgo entry point is guarded
 by the `upgrade_e2e` build tag; ordinary unit tests never silently attempt a
@@ -223,16 +249,18 @@ The target asserts:
 2. The original HFC survives; its expected components reach their release images,
    current status generation and completed rollouts. No old live pods may remain.
 3. The target API's migration init container uses the target image and exits zero.
-4. A complete `Progressing=False → True → False` history, continuous reported
-   availability of existing workloads, and bounded startup of added components.
+4. An observed `Progressing=False → True → False` sequence, continuous reported
+   availability of existing workloads, and bounded startup of added components
+   within the condition-history evidence limits above.
 5. Release-pair hash expectations and exact target hashes for every component,
    API data survival, a no-op HFC annotation, and a metadata-only Secret change
    with an exact new API hash and correctly scoped rollout effects.
 
 ## Evidence and cleanup
 
-Artifacts include the selected image/CSV identities, Go/opm/skopeo versions and
-platform checks, condition and Deployment/pod watch histories, before/after
+Artifacts include the selected image/CSV identities, Go/opm/Podman versions and
+platform checks, condition history with explicit resync markers and
+Deployment/pod watch histories, before/after
 workload generations and hashes, exact target hash comparisons and source
 metadata identities, API record fingerprint, OLM summaries,
 pod/runtime-image/migration status, cluster version, bounded redacted logs,
@@ -248,32 +276,49 @@ CI must also archive the runner image digest and test checkout revision, with
 any local patch when testing an uncommitted checkout, alongside these artifacts.
 
 Cleanup uses a separate bounded context even when the test fails or is cancelled.
-It confirms deletion of the data probe, deletes the original HFC and waits for
-foreground deletion, removes the Subscription and its InstallPlans before the
-CSVs, removes the test-introduced CRD, deletes the namespace, and releases the
-Lease. Probe recovery and deletion have a two-minute ceiling (also bounded by
-the stage timeout and half the remaining cleanup time), reserving time for
-Kubernetes teardown. An accepted DELETE alone does not prove finalization.
+It confirms deletion of the data probe, deletes the original HFC with background
+propagation and waits for the HFC to disappear, removes the Subscription and its
+InstallPlans before the CSVs, removes the test-introduced CRD, waits for namespace
+deletion, and releases the Lease. Background propagation avoids a foreground
+deletion deadlock with published operators that still reconcile a terminating
+HFC and recreate its dependents. HFC disappearance alone does not prove operand
+cleanup: namespace deletion must also complete before the Lease is released.
+Cleanup does not patch away custom finalizers. Probe recovery and deletion have
+a two-minute ceiling (also bounded by the stage timeout and half the remaining
+cleanup time), reserving time for Kubernetes teardown. An accepted DELETE alone
+does not prove finalization.
 A failed data-probe deletion does not prevent Kubernetes teardown; its
 receipt remains for the owner to resolve any record in an external database.
-Deletions use UID preconditions. CSV UIDs are saved when first observed, and
-cleanup refuses a same-name CSV with a different or unrecorded UID. If
-installation stops before the CSV UID was recorded, cleanup leaves the receipt
-and Lease for manual investigation. Pre-existing/replacement resources are not
-adopted. A failed cleanup remains a test failure and leaves the Lease/receipt
-for investigation.
+Deletions use UID preconditions. CSV UIDs are saved when first observed. Before
+each approval, the receipt also records the exact InstallPlan name/UID and a
+filtered CSV LIST checkpoint proving that the selected CSV was absent. If an
+approval response is lost before its CSV UID is recorded, cleanup first verifies
+that the original approved plan belongs to the recorded Subscription, selects
+the expected CSV/catalog, and reports the CSV step as `Created` (not `Present`).
+It then replays the CSV watch from the saved checkpoint and accepts only the
+original `Added` event whose UID matches the current CSV. The recovered UID is
+saved before deleting the Subscription, InstallPlans or CSVs.
+
+An approval flag, matching name, or namespace alone never establishes CSV
+ownership. Missing provenance, expired creation history, or a replacement causes
+cleanup to refuse deletion and retain the receipt/Lease for investigation. CSV
+creation history cannot use the HFC watch's resync fallback: a fresh snapshot
+cannot identify a previously unseen replacement. Older receipts without approval
+checkpoints retain the same refusal behavior for unrecorded CSVs. Pre-existing
+and replacement resources are not adopted. A failed cleanup remains a test
+failure and leaves the Lease/receipt for investigation.
 
 For a composed RC workflow, set `UPGRADE_RETAIN_ON_SUCCESS=true`. The outer
 workflow must run this in its **always-run post step**, after downstream tests:
 
 ```sh
-GOTOOLCHAIN=go1.26.0 make cleanup-e2e-upgrade \
+make cleanup-e2e-upgrade \
   KUBECONFIG="$UPGRADE_KUBECONFIG" ARTIFACT_DIR="$RUN_ARTIFACT_DIR"
 ```
 
 The receipt binds cleanup to the cluster's `kube-system` UID and the run's
-namespace/Lease/Subscription/HFC/CRD/CSV identities. Preserve it if a process
-is force-killed.
+namespace/Lease/Subscription/HFC/CRD/CSV identities, approval-plan identities and
+CSV creation checkpoints. Preserve it if a process is force-killed.
 A receipt is saved before platform checks or cluster mutations. An early-failure
 receipt with no cluster identity or pending mutations needs no cluster access to
 clean up. A missing receipt is reported explicitly and cleanup makes no changes;
@@ -292,10 +337,16 @@ modify the real release pipelines.
 
 ## Local verification and CI integration
 
+The suite uses the official `github.com/operator-framework/api` OLM types for
+CSV decoding, InstallPlan validation, and resource construction. Version
+`v0.42.0` supports the repository's Go 1.26.0 toolchain; releases v0.43.0 through
+v0.46.0 require Go 1.26.3. The dynamic client still performs cluster requests,
+including the UID/resource-version-checked approval patch and cleanup deletes.
+
 ```sh
 GOTOOLCHAIN=go1.26.0 go test -race ./test/e2e/upgrade
 GOTOOLCHAIN=go1.26.0 go test -tags=upgrade_e2e ./test/e2e/upgrade -run '^$'
-GOTOOLCHAIN=go1.26.0 make lint-config lint test build
+make lint-config lint test build
 git diff --check
 ```
 
@@ -320,3 +371,21 @@ does not itself change 1413's acceptance criteria. Shared E2E journeys need an
 operator-compatible setup before they can use a retained installation. Catalog
 publishing is separately tracked by HYPERFLEET-1884/1770/1773.
 The supplied catalog's selected channel is authoritative; this test never rewrites it.
+
+The current [release manifest](https://github.com/openshift-hyperfleet/hyperfleet-release/blob/main/RELEASE_MANIFEST.yaml)
+and [RC trigger](https://github.com/openshift-hyperfleet/hyperfleet-release/blob/main/scripts/trigger-rc-e2e.sh)
+select component images and Helm chart refs; they do not supply an operator
+bundle pair, catalog, or upgrade scenario. Their existing shared-GKE RC job
+therefore cannot satisfy this criterion simply by adding the Make target.
+Completing the CI integration requires:
+
+1. Qualified immutable bundle/catalog references and a scenario/fixture set for
+   that release pair, including the target hash contract.
+2. A dedicated cluster (or equivalent full cluster isolation), OLM Classic,
+   registry access, and a runner with Go, `opm`, and working nested Podman.
+3. A job in `openshift/release` that invokes `make test-e2e-upgrade` for every
+   relevant change, collects its JUnit and diagnostics even on failure, and
+   cleans up the test installation and disposable infrastructure.
+4. A successful run of that job, with the tested source revision and immutable
+   release inputs recorded. A helper-test pass or manually triggered Helm E2E
+   run does not close this acceptance criterion.
