@@ -163,8 +163,6 @@ spec:
           description: Semantic version extracted from git tag ref
         - name: MAJOR_VERSION
           description: Semantic version extracted from git tag ref
-        - name: DEFAULT_CHANNEL
-          description: Default channel extracted from git tag ref
         steps:
         - name: extract
           image: registry.access.redhat.com/ubi9-minimal:latest
@@ -172,14 +170,8 @@ spec:
             #!/usr/bin/env bash
             VERSION="${TAG_REF#refs/tags/bundle-v}"
             MAJOR_VERSION="v${VERSION%%.*}"
-            if [[ "$VERSION" == *-rc* ]]; then
-              DEFAULT_CHANNEL="candidate-${MAJOR_VERSION}"
-            else
-              DEFAULT_CHANNEL="stable-${MAJOR_VERSION}"
-            fi
             printf '%s' "$VERSION" > "$(results.VERSION.path)"
             printf '%s' "$MAJOR_VERSION" > "$(results.MAJOR_VERSION.path)"
-            printf '%s' "$DEFAULT_CHANNEL" > "$(results.DEFAULT_CHANNEL.path)"
           env:
           - name: TAG_REF
             value: $(params.TAG_REF)
@@ -259,8 +251,8 @@ spec:
         - APP_VERSION=$(tasks.parse-tag.results.VERSION)
         - KUSTOMIZE_VARIANT=config/manifests/prod
         - BUNDLE_VERSION=$(tasks.parse-tag.results.VERSION)
-        - CHANNELS=candidate-$(tasks.parse-tag.results.MAJOR_VERSION),stable-$(tasks.parse-tag.results.MAJOR_VERSION)
-        - DEFAULT_CHANNEL=$(tasks.parse-tag.results.DEFAULT_CHANNEL)
+        - CHANNELS=stable-$(tasks.parse-tag.results.MAJOR_VERSION)
+        - DEFAULT_CHANNEL=$(tasks.parse-tag.results.MAJOR_VERSION)
         - VALIDATE_RELATED_IMAGES=true
       - name: PRIVILEGED_NESTED
         value: $(params.privileged-nested)

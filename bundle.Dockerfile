@@ -22,7 +22,7 @@ COPY config/ ./config/
 COPY --from=validator /workdir/bin/related-images-validator ./related-images-validator
 
 # Specify the kustomize variant, either config/manifests/dev or config/manifests/prod
-ARG KUSTOMIZE_VARIANT=config/manifests/dev
+ARG KUSTOMIZE_VARIANT=config/manifests/prod
 RUN kustomize build /workdir/${KUSTOMIZE_VARIANT} > /workdir/manifests.yaml
 
 ARG CHANNELS=stable
