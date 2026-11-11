@@ -252,7 +252,7 @@ spec:
         - KUSTOMIZE_VARIANT=config/manifests/prod
         - BUNDLE_VERSION=$(tasks.parse-tag.results.VERSION)
         - CHANNELS=stable-$(tasks.parse-tag.results.MAJOR_VERSION)
-        - DEFAULT_CHANNEL=$(tasks.parse-tag.results.MAJOR_VERSION)
+        - DEFAULT_CHANNEL=stable-$(tasks.parse-tag.results.MAJOR_VERSION)
         - VALIDATE_RELATED_IMAGES=true
       - name: PRIVILEGED_NESTED
         value: $(params.privileged-nested)
