@@ -53,7 +53,8 @@ guidance. `CLAUDE.md` only imports it for Claude Code compatibility.
 
 ## Commands and verification
 
-Use Go 1.26.0 as specified in `go.mod`. With a newer local Go, prefix commands
+Use Go 1.26.0 as specified in `go.mod`. Make defaults to `GOTOOLCHAIN=go1.26.0`
+unless explicitly overridden. With a newer local Go, prefix direct `go` commands
 with `GOTOOLCHAIN=go1.26.0`; do not upgrade pinned tools to work around local
 toolchain incompatibility. The Makefile invokes tools pinned in `tools/go.mod`.
 

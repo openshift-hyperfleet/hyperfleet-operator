@@ -13,7 +13,7 @@ not duplicated here.
 
 ## Prerequisites
 
-- Go 1.26.0, matching `go.mod` (the pinned golangci-lint does not support Go 1.27; on newer toolchains, prefix commands with `GOTOOLCHAIN=go1.26.0`).
+- Go 1.26.0, matching `go.mod`. Make defaults to `GOTOOLCHAIN=go1.26.0`, while honoring an explicit environment or command-line override. For direct `go` commands on a newer toolchain, use the same prefix; the pinned golangci-lint does not support Go 1.27.
 - Docker. The image and e2e targets are scaffolded and tested with Docker;
   alternative container tools are not assumed to work.
 - `envsubst` (provided by gettext) for development OLM bundle overlays.
@@ -143,6 +143,11 @@ See [Component Install Tracker](component-install-tracker.md) for latest
 requirements regarding installation of operator.
 
 ## End-to-end tests
+
+For published N−1 → N bundles on a prepared isolated cluster, use the separate
+[OLM Classic upgrade suite](upgrade-testing.md). Its ordinary helper tests run
+under `make test`; live execution requires `make test-e2e-upgrade` and explicit
+release/scenario inputs. It does not reuse the local-manager setup below.
 
 Use a dedicated Kind cluster name that contains no valuable workloads:
 
