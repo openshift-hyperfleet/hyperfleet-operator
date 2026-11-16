@@ -14,6 +14,7 @@ not duplicated here.
 ## Prerequisites
 
 - Go 1.26.0, matching `go.mod` (the pinned golangci-lint does not support Go 1.27; on newer toolchains, prefix commands with `GOTOOLCHAIN=go1.26.0`).
+- Production builds use Go's native FIPS 140-3 module (`GOFIPS140=v1.0.0`) and explicitly disable the incompatible BoringCrypto experiment (`GOEXPERIMENT=noboringcrypto`). The Dockerfile verifies the selected module with `go version -m`.
 - Docker. The image and e2e targets are scaffolded and tested with Docker;
   alternative container tools are not assumed to work.
 - `envsubst` (provided by gettext) for development OLM bundle overlays.

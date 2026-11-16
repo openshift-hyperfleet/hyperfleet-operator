@@ -28,7 +28,7 @@ RUN --mount=type=cache,target=/opt/app-root/src/go/pkg/mod,uid=1001 \
 
 # Fail the build if the binary wasn't compiled with FIPS-compliant flags (see container-image-standard.md)
 RUN go version -m /build/bin/manager | grep -q "CGO_ENABLED=1" || { echo "FIPS check FAILED: missing CGO_ENABLED=1"; exit 1; }
-RUN go version -m /build/bin/manager | grep -q "GOEXPERIMENT=boringcrypto" || { echo "FIPS check FAILED: missing GOEXPERIMENT=boringcrypto"; exit 1; }
+RUN go version -m /build/bin/manager | grep -Eq 'GOFIPS140=v1[.]0[.]0(-[[:xdigit:]]+)?$' || { echo "FIPS check FAILED: missing GOFIPS140=v1.0.0"; exit 1; }
 
 # Runtime stage
 FROM ${BASE_IMAGE} AS final

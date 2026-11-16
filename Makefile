@@ -100,7 +100,7 @@ setup-envtest: $(LOCALBIN) ## Download the envtest binaries (etcd, kube-apiserve
 
 .PHONY: test
 test: manifests generate fmt vet setup-envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use '$(ENVTEST_K8S_VERSION)' --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
+	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use '$(ENVTEST_K8S_VERSION)' --bin-dir $(LOCALBIN) -p path)" GOEXPERIMENT=$(GOEXPERIMENT) GOFIPS140=$(GOFIPS140) go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
 .PHONY: setup-test-e2e
 setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
@@ -118,7 +118,7 @@ setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
 
 .PHONY: test-e2e
 test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
-	KIND_CLUSTER=$(KIND_CLUSTER) go test ./test/e2e/ -v -ginkgo.v
+	KIND_CLUSTER=$(KIND_CLUSTER) GOEXPERIMENT=$(GOEXPERIMENT) GOFIPS140=$(GOFIPS140) go test ./test/e2e/ -v -ginkgo.v
 	$(MAKE) cleanup-test-e2e
 
 .PHONY: cleanup-test-e2e
@@ -201,10 +201,11 @@ GIT_DIRTY ?= $(shell [ -z "$$(git status --porcelain 2>/dev/null)" ] || echo "-m
 
 # For container builds, use linux by default; override PLATFORM to build for other platforms (e.g. linux/arm64)
 
-# Go build flags (FIPS compliant)
+# Native FIPS mode; explicitly disable the incompatible BoringCrypto experiment,
+# including when it was persisted in the toolchain with "go env -w".
 CGO_ENABLED ?= 1
-GOEXPERIMENT ?= boringcrypto
-GOFIPS140 ?= off
+GOEXPERIMENT ?= noboringcrypto
+GOFIPS140 ?= v1.0.0
 GOFLAGS ?= -trimpath
 # `make run` uses `go run` directly, so it won't embed APP_VERSION/GIT_SHA (see internal/version).
 
