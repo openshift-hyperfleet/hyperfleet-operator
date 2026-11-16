@@ -2,6 +2,8 @@ module github.com/openshift-hyperfleet/hyperfleet-operator
 
 go 1.26.0
 
+godebug fips140=on
+
 require (
 	github.com/distribution/reference v0.6.0
 	github.com/onsi/ginkgo/v2 v2.27.4
