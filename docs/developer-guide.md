@@ -14,7 +14,8 @@ not duplicated here.
 ## Prerequisites
 
 - Go 1.26.0, matching `go.mod` (the pinned golangci-lint does not support Go 1.27; on newer toolchains, prefix commands with `GOTOOLCHAIN=go1.26.0`).
-- Production builds use Go's native FIPS 140-3 module (`GOFIPS140=v1.0.0`) and explicitly disable the incompatible BoringCrypto experiment (`GOEXPERIMENT=noboringcrypto`). The Dockerfile verifies the selected module with `go version -m`.
+- Production builds use Go's native FIPS 140-3 module (`GOFIPS140=v1.0.0`). `GOEXPERIMENT=noboringcrypto` keeps builds compatible with toolchains where the legacy BoringCrypto experiment was saved with `go env -w`; without the negation, Go rejects the incompatible combination rather than silently falling back to non-FIPS cryptography. The Dockerfile verifies the selected module with `go version -m`.
+- FIPS production deployments must not set `GODEBUG=fips140=off`, including within a comma-separated value. This override disables FIPS without changing the binary's build info. Deployment review must check runtime overrides; the image check does not enforce the runtime mode, and this requirement does not add a startup rejection.
 - Docker. The image and e2e targets are scaffolded and tested with Docker;
   alternative container tools are not assumed to work.
 - `envsubst` (provided by gettext) for development OLM bundle overlays.
