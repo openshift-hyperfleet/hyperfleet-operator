@@ -169,7 +169,7 @@ OPERATOR_NAMESPACE ?= hyperfleet-system
 
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
-	OPERATOR_NAMESPACE=$(OPERATOR_NAMESPACE) go run ./cmd/main.go
+	CGO_ENABLED=$(CGO_ENABLED) GOEXPERIMENT=$(GOEXPERIMENT) GOFIPS140=$(GOFIPS140) OPERATOR_NAMESPACE=$(OPERATOR_NAMESPACE) $(GO) run $(GOFLAGS) ./cmd/main.go
 
 
 ##@ Container Images
@@ -217,10 +217,14 @@ GOFLAGS ?= -trimpath
 # That backend aborts at startup on FIPS-enabled hosts once a fips140 GODEBUG
 # value is set, so those toolchains must build with Go's native backend.
 ifneq (,$(findstring Red Hat,$(shell $(GO) version 2>/dev/null)))
-# override keeps the tag when GOFLAGS is passed on the make command line.
+# A second -tags flag replaces the first, so merge with any caller-supplied list.
+GOFLAGS_CALLER_TAGS := $(strip $(patsubst -tags=%,%,$(filter -tags=%,$(GOFLAGS))))
+ifeq (,$(GOFLAGS_CALLER_TAGS))
 override GOFLAGS += -tags=no_openssl
+else
+override GOFLAGS := $(filter-out -tags=%,$(GOFLAGS)) -tags=$(GOFLAGS_CALLER_TAGS),no_openssl
 endif
-export GOFLAGS
+endif
 # `make run` uses `go run` directly, so it won't embed APP_VERSION/GIT_SHA (see internal/version).
 
 # shell-quote safely single-quotes $(1) for use as one shell word.
