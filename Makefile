@@ -217,8 +217,10 @@ GOFLAGS ?= -trimpath
 # That backend aborts at startup on FIPS-enabled hosts once a fips140 GODEBUG
 # value is set, so those toolchains must build with Go's native backend.
 ifneq (,$(findstring Red Hat,$(shell $(GO) version 2>/dev/null)))
-GOFLAGS += -tags=no_openssl
+# override keeps the tag when GOFLAGS is passed on the make command line.
+override GOFLAGS += -tags=no_openssl
 endif
+export GOFLAGS
 # `make run` uses `go run` directly, so it won't embed APP_VERSION/GIT_SHA (see internal/version).
 
 # shell-quote safely single-quotes $(1) for use as one shell word.
