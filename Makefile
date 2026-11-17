@@ -9,11 +9,14 @@ VERSION ?= 0.0.1
 # This is useful for CI or a project to utilize a specific version of the operator-sdk toolkit.
 OPERATOR_SDK_VERSION ?= v1.42.3
 
+# The Go command used by every recipe; toolchain detection reads the same one.
+GO ?= go
+
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
-ifeq (,$(shell go env GOBIN))
-GOBIN=$(shell go env GOPATH)/bin
+ifeq (,$(shell $(GO) env GOBIN))
+GOBIN=$(shell $(GO) env GOPATH)/bin
 else
-GOBIN=$(shell go env GOBIN)
+GOBIN=$(shell $(GO) env GOBIN)
 endif
 
 # Container tool (docker or podman)
@@ -32,7 +35,7 @@ ROOT_DIR := $(dir $(realpath $(firstword $(MAKEFILE_LIST))))
 
 # Tool versioning
 TOOL_MOD := $(ROOT_DIR)tools/go.mod
-gotool = go tool -modfile="$(TOOL_MOD)" $(1)
+gotool = $(GO) tool -modfile="$(TOOL_MOD)" $(1)
 
 # Tool shortcuts
 CONTROLLER_GEN := $(call gotool,controller-gen)
@@ -73,7 +76,7 @@ fmt: ## Run go fmt against code.
 
 .PHONY: vet
 vet: ## Run go vet against code.
-	go vet ./...
+	$(GO) vet ./...
 
 .PHONY: gofmt
 gofmt: fmt ## Alias for fmt (used by the hyperfleet-gofmt pre-commit hook).
@@ -86,7 +89,7 @@ install-hooks: ## Install pre-commit hooks.
 	pre-commit install
 
 ##@ Testing
-ENVTEST_K8S_VERSION ?= $(shell go list -m -f "{{ .Version }}" k8s.io/api | awk -F'[v.]' '{printf "1.%d", $$3}')
+ENVTEST_K8S_VERSION ?= $(shell $(GO) list -m -f "{{ .Version }}" k8s.io/api | awk -F'[v.]' '{printf "1.%d", $$3}')
 KIND_CLUSTER ?= hyperfleet-operator-test-e2e
 
 # TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
@@ -100,7 +103,7 @@ setup-envtest: $(LOCALBIN) ## Download the envtest binaries (etcd, kube-apiserve
 
 .PHONY: test
 test: manifests generate fmt vet setup-envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use '$(ENVTEST_K8S_VERSION)' --bin-dir $(LOCALBIN) -p path)" CGO_ENABLED=$(CGO_ENABLED) GOEXPERIMENT=$(GOEXPERIMENT) GOFIPS140=$(GOFIPS140) go test $$(CGO_ENABLED=$(CGO_ENABLED) GOEXPERIMENT=$(GOEXPERIMENT) GOFIPS140=$(GOFIPS140) go list ./... | grep -v /e2e) -coverprofile cover.out
+	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use '$(ENVTEST_K8S_VERSION)' --bin-dir $(LOCALBIN) -p path)" CGO_ENABLED=$(CGO_ENABLED) GOEXPERIMENT=$(GOEXPERIMENT) GOFIPS140=$(GOFIPS140) $(GO) test $$(CGO_ENABLED=$(CGO_ENABLED) GOEXPERIMENT=$(GOEXPERIMENT) GOFIPS140=$(GOFIPS140) $(GO) list ./... | grep -v /e2e) -coverprofile cover.out
 
 .PHONY: setup-test-e2e
 setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
@@ -118,7 +121,7 @@ setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
 
 .PHONY: test-e2e
 test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
-	KIND_CLUSTER=$(KIND_CLUSTER) CGO_ENABLED=$(CGO_ENABLED) GOEXPERIMENT=$(GOEXPERIMENT) GOFIPS140=$(GOFIPS140) go test ./test/e2e/ -v -ginkgo.v
+	KIND_CLUSTER=$(KIND_CLUSTER) CGO_ENABLED=$(CGO_ENABLED) GOEXPERIMENT=$(GOEXPERIMENT) GOFIPS140=$(GOFIPS140) $(GO) test ./test/e2e/ -v -ginkgo.v
 	$(MAKE) cleanup-test-e2e
 
 .PHONY: cleanup-test-e2e
@@ -160,7 +163,7 @@ test-disconnected-mirror: build-oc-mirror-image ## Test catalog archive import u
 
 .PHONY: build
 build: ## Build manager binary.
-	CGO_ENABLED=$(CGO_ENABLED) GOEXPERIMENT=$(GOEXPERIMENT) GOFIPS140=$(GOFIPS140) go build $(GOFLAGS) -ldflags="-s -w -X github.com/openshift-hyperfleet/hyperfleet-operator/internal/version.version=$(APP_VERSION) -X github.com/openshift-hyperfleet/hyperfleet-operator/internal/version.commit=$(GIT_SHA)" -o bin/manager cmd/main.go
+	CGO_ENABLED=$(CGO_ENABLED) GOEXPERIMENT=$(GOEXPERIMENT) GOFIPS140=$(GOFIPS140) $(GO) build $(GOFLAGS) -ldflags="-s -w -X github.com/openshift-hyperfleet/hyperfleet-operator/internal/version.version=$(APP_VERSION) -X github.com/openshift-hyperfleet/hyperfleet-operator/internal/version.commit=$(GIT_SHA)" -o bin/manager cmd/main.go
 
 # OPERATOR_NAMESPACE is the namespace the operator creates operands in. In-cluster
 # it comes from the downward API; for `make run` it defaults here so local dev works.
@@ -211,7 +214,6 @@ GIT_DIRTY ?= $(shell [ -z "$$(git status --porcelain 2>/dev/null)" ] || echo "-m
 CGO_ENABLED ?= 1
 GOEXPERIMENT ?= noboringcrypto
 GOFIPS140 ?= v1.0.0
-GO ?= go
 GOFLAGS ?= -trimpath
 # Red Hat Go toolsets use the OpenSSL crypto backend by default on linux+cgo.
 # That backend aborts at startup on FIPS-enabled hosts once a fips140 GODEBUG
@@ -468,7 +470,7 @@ ifeq (, $(shell which operator-sdk 2>/dev/null))
 	@{ \
 	set -e ;\
 	mkdir -p $(dir $(OPERATOR_SDK)) ;\
-	OS=$(shell go env GOOS) && ARCH=$(shell go env GOARCH) && \
+	OS=$(shell $(GO) env GOOS) && ARCH=$(shell $(GO) env GOARCH) && \
 	curl -sSLo $(OPERATOR_SDK) https://github.com/operator-framework/operator-sdk/releases/download/$(OPERATOR_SDK_VERSION)/operator-sdk_$${OS}_$${ARCH} ;\
 	chmod +x $(OPERATOR_SDK) ;\
 	}
@@ -481,7 +483,7 @@ endif
 .PHONY: opm
 OPM = $(LOCALBIN)/opm
 OPM_VERSION ?= v1.55.0
-OPM_PLATFORM = $(shell go env GOOS)-$(shell go env GOARCH)
+OPM_PLATFORM = $(shell $(GO) env GOOS)-$(shell $(GO) env GOARCH)
 # sha256 of the $(OPM_VERSION) release binaries, from the release's checksums.txt
 OPM_SHA256_linux-amd64 := eed05ce8d6c21bb4acf4683f270ea7fd69ecf492cb58459c5689575c80800921
 OPM_SHA256_linux-arm64 := 4048b965d25a96bdaca5c2ca4e45418ba286391f960708e774760c7abfa509ad
