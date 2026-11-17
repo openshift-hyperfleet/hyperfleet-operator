@@ -31,8 +31,10 @@ Before running, qualify these inputs together:
 - **Catalog:** One catalog image, pinned by digest for a repeatable run, contains
   both digest-pinned bundles and remains unchanged throughout the test.
 - **Upgrade edge:** In one selected channel, N directly `replaces` N−1 and is
-  the channel head; no `skips`/`skipRange` path. The Subscription starts at
-  N−1's CSV and then upgrades to N through that same catalog and channel.
+  the channel head. No entry may list either selected CSV in `skips` or have a
+  `skipRange` covering either selected version. Historical ranges excluding
+  both versions are allowed; malformed ranges fail preflight. The Subscription
+  starts at N−1's CSV and then upgrades to N through that same catalog and channel.
 - **Install mode:** Both bundles support `AllNamespaces` and own only the HyperFleetConfig CRD.
 - **Image contract:** CSV related images and `RELATED_IMAGE_*` values agree.
 - **Inventory:** The scenario describes each release's actual components and Deployment/container names.
@@ -183,6 +185,15 @@ current algorithm's own properties are also tested in
   with a `resync` marker containing the old and new watch checkpoints in
   `conditions.json`; earlier observations remain intact. Missing, replaced,
   deleting or spec-changed HFCs and other watch errors fail the test.
+- **Watch timeouts:** Initial connections and reconnects for HFC, Deployment,
+  and Pod histories must establish within `UPGRADE_TIMEOUT`. Once established,
+  their streams keep the normal lifetime; the setup timeout does not truncate them.
+- **Resync availability:** The HFC's `Available` status and `lastTransitionTime`
+  must match the last observation before each resync. A changed timestamp can
+  reveal an unobserved False → True transition even when the snapshot is healthy.
+  Any change fails, including with a positive `maxUnavailable` budget, because
+  the missing history cannot establish the dip's duration or attribute it to
+  an added component.
 - **Evidence limits:** A resync cannot recover missed condition updates or prove
   continuous HFC/component conditions across that gap. The observed
   `Progressing=False → True → False` sequence is still required; a healthy resync

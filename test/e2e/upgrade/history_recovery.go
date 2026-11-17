@@ -37,7 +37,7 @@ func (h *history) openWatch(ctx context.Context, client dynamic.Interface,
 				return nil, err
 			}
 		}
-		stream, err := client.Resource(hfcResource).Watch(ctx, *options)
+		stream, err := openHistoryWatch(ctx, client.Resource(hfcResource), *options, h.listTimeout)
 		if err == nil {
 			return stream, nil
 		}

@@ -160,6 +160,23 @@ func TestCatalogRequiresExactSequentialPair(t *testing.T) {
 			return append(e, channelEntry{Name: "later", Replaces: e[1].Name})
 		}, true},
 		{"skip range", func(e []channelEntry) []channelEntry { e[1].SkipRange = ">=1.0.0"; return e }, true},
+		{"unrelated historical range", func(e []channelEntry) []channelEntry {
+			return append(e, channelEntry{Name: packageName + ".v0.0.1", SkipRange: "<0.0.1"})
+		}, false},
+		{"target range excludes pair", func(e []channelEntry) []channelEntry {
+			e[1].SkipRange = "<1.0.0"
+			return e
+		}, false},
+		{"range covers only baseline", func(e []channelEntry) []channelEntry {
+			e[1].SkipRange = ">=1.0.0 <1.0.1-rc1"
+			return e
+		}, true},
+		{"range covers only target prerelease", func(e []channelEntry) []channelEntry {
+			return append(e, channelEntry{Name: "later", SkipRange: ">=1.0.1-rc1 <1.0.1"})
+		}, true},
+		{"invalid historical range", func(e []channelEntry) []channelEntry {
+			return append(e, channelEntry{Name: "older", SkipRange: "not-a-semver-range"})
+		}, true},
 		{"skips baseline", func(e []channelEntry) []channelEntry { e[1].Skips = []string{e[0].Name}; return e }, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

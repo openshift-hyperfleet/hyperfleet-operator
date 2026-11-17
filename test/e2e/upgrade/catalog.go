@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/blang/semver/v4"
 	"github.com/distribution/reference"
 	operatorsv1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -355,7 +356,13 @@ func validateCatalog(data []byte, channel string, pair releasePair) error {
 			}
 		}
 		if e.SkipRange != "" {
-			return fmt.Errorf("selected channel must use explicit replaces edges, not skipRange")
+			skipRange, err := semver.ParseRange(e.SkipRange)
+			if err != nil {
+				return fmt.Errorf("channel entry %s has an invalid skipRange", e.Name)
+			}
+			if skipRange(pair.From.CSV.Spec.Version.Version) || skipRange(pair.To.CSV.Spec.Version.Version) {
+				return fmt.Errorf("channel entry %s skipRange covers the selected pair", e.Name)
+			}
 		}
 	}
 	if !foundFrom || !foundTo {

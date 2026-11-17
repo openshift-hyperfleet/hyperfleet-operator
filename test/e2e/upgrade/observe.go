@@ -241,6 +241,7 @@ func validateHistory(observations []observation, maxGap time.Duration) error {
 	}
 	sawProgress, finished := false, false
 	var unavailableSince time.Time
+	var previousAvailable metav1.Condition
 	for _, o := range observations {
 		if o.UID != baseline.UID || o.Generation != baseline.Generation {
 			return fmt.Errorf("HyperFleetConfig identity/spec changed during upgrade")
@@ -253,6 +254,13 @@ func validateHistory(observations []observation, maxGap time.Duration) error {
 		if transition.IsZero() {
 			return fmt.Errorf("available condition has no transition timestamp")
 		}
+		// A healthy resync can hide False -> True inside the expired history.
+		// Even with a budget, we cannot measure or attribute an unobserved dip.
+		if o.Resync != nil && (available.Status != previousAvailable.Status ||
+			!available.LastTransitionTime.Equal(&previousAvailable.LastTransitionTime)) {
+			return fmt.Errorf("availability changed across condition history resync; gap cannot be verified")
+		}
+		previousAvailable = available
 		if available.Status != metav1.ConditionTrue {
 			if maxGap == 0 {
 				return fmt.Errorf("reported availability did not remain true")

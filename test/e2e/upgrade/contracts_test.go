@@ -295,7 +295,7 @@ func TestWatchClientDoesNotInheritRequestTimeout(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
-	stream, err := client.Resource(hfcResource).Watch(ctx, metav1.ListOptions{})
+	stream, err := openHistoryWatch(ctx, client.Resource(hfcResource), metav1.ListOptions{}, 25*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}

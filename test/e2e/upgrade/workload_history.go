@@ -70,13 +70,14 @@ func observeWorkload(obj *unstructured.Unstructured, gvr schema.GroupVersionReso
 }
 
 type workloadHistory struct {
-	mu      sync.Mutex
-	records []workloadObservation
-	err     error
-	client  dynamic.ResourceInterface
-	gvr     schema.GroupVersionResource
-	cancel  context.CancelFunc
-	done    chan struct{}
+	mu           sync.Mutex
+	records      []workloadObservation
+	err          error
+	client       dynamic.ResourceInterface
+	gvr          schema.GroupVersionResource
+	cancel       context.CancelFunc
+	done         chan struct{}
+	watchTimeout time.Duration
 }
 
 func startWorkloadHistory(ctx context.Context, client dynamic.ResourceInterface,
@@ -93,7 +94,8 @@ func startWorkloadHistory(ctx context.Context, client dynamic.ResourceInterface,
 		return nil, fmt.Errorf("%s list has no history resourceVersion", gvr.Resource)
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	h := &workloadHistory{client: client, gvr: gvr, cancel: cancel, done: make(chan struct{})}
+	h := &workloadHistory{client: client, gvr: gvr, cancel: cancel, done: make(chan struct{}),
+		watchTimeout: listTimeout}
 	for i := range baseline.Items {
 		if err = h.record(&baseline.Items[i], watch.Added); err != nil {
 			cancel()
@@ -102,7 +104,7 @@ func startWorkloadHistory(ctx context.Context, client dynamic.ResourceInterface,
 	}
 	options := metav1.ListOptions{ResourceVersion: baseline.GetResourceVersion(),
 		AllowWatchBookmarks: true, TimeoutSeconds: ptr.To[int64](60)}
-	stream, err := client.Watch(ctx, options)
+	stream, err := openHistoryWatch(ctx, client, options, h.watchTimeout)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -132,7 +134,7 @@ func (h *workloadHistory) read(ctx context.Context, stream watch.Interface, opti
 				if !waitForWatchReconnect(ctx) {
 					return nil
 				}
-				next, err := h.client.Watch(ctx, options)
+				next, err := openHistoryWatch(ctx, h.client, options, h.watchTimeout)
 				if err != nil {
 					return fmt.Errorf("%s history reconnect failed", h.gvr.Resource)
 				}

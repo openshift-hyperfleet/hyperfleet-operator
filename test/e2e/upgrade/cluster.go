@@ -75,7 +75,8 @@ func newClients(kubeconfig string) (clients, error) {
 		return clients{}, fmt.Errorf("create dynamic client: %w", err)
 	}
 	// The ordinary request timeout would truncate the 60-second history watches.
-	// Watch lifetime is bounded by the suite context and server-side timeout.
+	// Watch lifetime is bounded by the suite context and server-side timeout;
+	// openHistoryWatch separately bounds establishment by the stage timeout.
 	watches, err := newWatchClient(config)
 	if err != nil {
 		return clients{}, fmt.Errorf("create watch client: %w", err)

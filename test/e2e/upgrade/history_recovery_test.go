@@ -215,3 +215,35 @@ func TestConditionWatchBoundsRepeatedExpiry(t *testing.T) {
 		t.Fatalf("repeated expiry was not bounded: calls=%d, error=%v", calls, err)
 	}
 }
+
+func TestConditionResyncChecksAvailabilityTransitions(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, tc := range []struct {
+		name       string
+		status     metav1.ConditionStatus
+		transition time.Time
+		gap        time.Duration
+		wantError  bool
+	}{
+		{"unchanged", metav1.ConditionTrue, now, 0, false},
+		{"hidden outage", metav1.ConditionTrue, now.Add(time.Second), 0, true},
+		{"hidden outage with budget", metav1.ConditionTrue, now.Add(time.Second), time.Minute, true},
+		{"regressed timestamp", metav1.ConditionTrue, now.Add(-time.Second), 0, true},
+		{"missing timestamp", metav1.ConditionTrue, time.Time{}, 0, true},
+		{"changed status with budget", metav1.ConditionFalse, now.Add(time.Second), time.Minute, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resync := sample(now.Add(2*time.Second), tc.status, metav1.ConditionTrue)
+			resync.Status.Conditions[0].LastTransitionTime = metav1.NewTime(tc.transition)
+			resync.Resync = &conditionResync{FromResourceVersion: "10", ResourceVersion: "20"}
+			records := []observation{
+				sample(now, metav1.ConditionTrue, metav1.ConditionFalse),
+				sample(now, metav1.ConditionTrue, metav1.ConditionTrue), resync,
+				sample(now.Add(3*time.Second), metav1.ConditionTrue, metav1.ConditionFalse),
+			}
+			if err := validateHistory(records, tc.gap); (err != nil) != tc.wantError {
+				t.Fatalf("error=%v; wantError=%v", err, tc.wantError)
+			}
+		})
+	}
+}
