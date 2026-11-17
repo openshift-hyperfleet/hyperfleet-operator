@@ -72,7 +72,7 @@ generate: ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject
 
 .PHONY: fmt
 fmt: ## Run go fmt against code.
-	go fmt ./...
+	$(GO) fmt ./...
 
 .PHONY: vet
 vet: ## Run go vet against code.
