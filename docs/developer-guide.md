@@ -31,6 +31,9 @@ not duplicated here.
   Do not set `fips140ems=0` through `GODEBUG`, `godebug` in `go.mod`/`go.work`,
   or `//go:debug` in the main package: it disables TLS 1.2 EMS enforcement.
   The Dockerfile rejects this compiled override even alongside `fips140=on`.
+  Neither that build check nor the runtime FIPS-mode guard detects a
+  deployment-time `GODEBUG=fips140ems=0` override; deployment configuration must
+  be reviewed separately.
 - Docker. The image and e2e targets are scaffolded and tested with Docker;
   alternative container tools are not assumed to work.
 - `envsubst` (provided by gettext) for development OLM bundle overlays.
