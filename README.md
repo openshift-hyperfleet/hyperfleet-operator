@@ -34,6 +34,7 @@ Applier bindings through cluster-scoped `ManagementClusterRegistration` records.
 ### Installing and operating the operator
 
 - [OLM bundle, catalog, and development installation](docs/olm.md)
+- [OLM Classic release upgrade testing](docs/upgrade-testing.md)
 - [Disconnected OpenShift installation](docs/disconnected-install.md)
 - [Metrics reference](docs/metrics.md)
 

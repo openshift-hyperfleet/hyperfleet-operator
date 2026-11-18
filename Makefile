@@ -9,6 +9,9 @@ VERSION ?= 0.0.1
 # This is useful for CI or a project to utilize a specific version of the operator-sdk toolkit.
 OPERATOR_SDK_VERSION ?= v1.42.3
 
+# Match go.mod and the pinned tools. Environment and command-line overrides win.
+export GOTOOLCHAIN ?= go1.26.0
+
 # The Go command used by every recipe.
 GO ?= go
 # Honor this module's godebug directive, not an enclosing workspace's defaults.
@@ -16,10 +19,11 @@ override GOWORK := off
 export GOWORK
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
-ifeq (,$(shell $(GO) env GOBIN))
-GOBIN=$(shell $(GO) env GOPATH)/bin
+# Pass GOTOOLCHAIN explicitly to $(shell): Make 3.81 does not export it there.
+ifeq (,$(shell GOTOOLCHAIN="$(GOTOOLCHAIN)" $(GO) env GOBIN))
+GOBIN=$(shell GOTOOLCHAIN="$(GOTOOLCHAIN)" $(GO) env GOPATH)/bin
 else
-GOBIN=$(shell $(GO) env GOBIN)
+GOBIN=$(shell GOTOOLCHAIN="$(GOTOOLCHAIN)" $(GO) env GOBIN)
 endif
 
 # Container tool (docker or podman)
@@ -79,7 +83,7 @@ fmt: ## Run go fmt against code.
 
 .PHONY: vet
 vet: ## Run go vet against code.
-	$(GO) vet ./...
+	$(GO) vet -tags=upgrade_e2e ./...
 
 .PHONY: gofmt
 gofmt: fmt ## Alias for fmt (used by the hyperfleet-gofmt pre-commit hook).
@@ -92,7 +96,7 @@ install-hooks: ## Install pre-commit hooks.
 	pre-commit install
 
 ##@ Testing
-ENVTEST_K8S_VERSION ?= $(shell $(GO) list -m -f "{{ .Version }}" k8s.io/api | awk -F'[v.]' '{printf "1.%d", $$3}')
+ENVTEST_K8S_VERSION ?= $(shell GOTOOLCHAIN="$(GOTOOLCHAIN)" $(GO) list -m -f "{{ .Version }}" k8s.io/api | awk -F'[v.]' '{printf "1.%d", $$3}')
 KIND_CLUSTER ?= hyperfleet-operator-test-e2e
 
 # TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
@@ -106,7 +110,7 @@ setup-envtest: $(LOCALBIN) ## Download the envtest binaries (etcd, kube-apiserve
 
 .PHONY: test
 test: manifests generate fmt vet setup-envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use '$(ENVTEST_K8S_VERSION)' --bin-dir $(LOCALBIN) -p path)" $(GO) test -tags="$${GO_TEST_TAGS}" $$($(GO) list ./... | grep -v /e2e) -coverprofile cover.out
+	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use '$(ENVTEST_K8S_VERSION)' --bin-dir $(LOCALBIN) -p path)" $(GO) test -tags="$${GO_TEST_TAGS}" $$($(GO) list ./... | grep -v '/test/e2e$$') -coverprofile cover.out
 
 .PHONY: setup-test-e2e
 setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
@@ -130,6 +134,37 @@ test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expect
 .PHONY: cleanup-test-e2e
 cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 	@$(KIND) delete cluster --name $(KIND_CLUSTER)
+
+# Prepared-cluster OLM tests consume published artifacts. They must not invoke
+# setup-test-e2e, build a replacement manager, or install locally generated CRDs.
+# The build tag keeps live execution out of ordinary unit tests and make test.
+export KUBECONFIG OLM_CATALOG_IMAGE UPGRADE_FROM_BUNDLE UPGRADE_TO_BUNDLE OLM_CHANNEL
+export UPGRADE_SCENARIO UPGRADE_NAMESPACE UPGRADE_TIMEOUT UPGRADE_RETAIN_ON_SUCCESS OPM PODMAN ARTIFACT_DIR
+
+.PHONY: test-e2e-upgrade
+test-e2e-upgrade: opm ## Test a published N-1 -> N OLM Classic upgrade on a prepared isolated cluster.
+	@for path_var in KUBECONFIG UPGRADE_SCENARIO ARTIFACT_DIR; do \
+		path_value="$${!path_var}"; \
+		if [[ -n "$$path_value" && "$$path_value" != /* ]]; then \
+			printf -v "$$path_var" '%s/%s' "$$PWD" "$$path_value"; export "$$path_var"; \
+		fi; \
+	done; \
+	test -n "$$ARTIFACT_DIR" || { echo "ARTIFACT_DIR is required" >&2; exit 1; }; \
+	test_tags=$$(printf '%s' "$${GO_TEST_TAGS}" | tr '[:space:]' ','); \
+	UPGRADE_CLEANUP_ONLY=false $(GO) test -tags="upgrade_e2e,$$test_tags" ./test/e2e/upgrade -run '^TestOLMUpgrade$$' -count=1 -timeout=2h30m -v \
+		-args -ginkgo.timeout=2h -ginkgo.junit-report="$$ARTIFACT_DIR/junit-upgrade.xml"
+
+.PHONY: cleanup-e2e-upgrade
+cleanup-e2e-upgrade: ## Clean a retained upgrade run using its UID-bound ARTIFACT_DIR/cleanup.json receipt.
+	@for path_var in KUBECONFIG ARTIFACT_DIR; do \
+		path_value="$${!path_var}"; \
+		if [[ -n "$$path_value" && "$$path_value" != /* ]]; then \
+			printf -v "$$path_var" '%s/%s' "$$PWD" "$$path_value"; export "$$path_var"; \
+		fi; \
+	done; \
+	test_tags=$$(printf '%s' "$${GO_TEST_TAGS}" | tr '[:space:]' ','); \
+	UPGRADE_CLEANUP_ONLY=true $(GO) test -tags="upgrade_e2e,$$test_tags" ./test/e2e/upgrade -run '^TestOLMUpgrade$$' -count=1 -timeout=45m -v \
+		-args -ginkgo.timeout=15m
 
 ##@ Lint
 
@@ -464,7 +499,7 @@ ifeq (, $(shell which operator-sdk 2>/dev/null))
 	@{ \
 	set -e ;\
 	mkdir -p $(dir $(OPERATOR_SDK)) ;\
-	OS=$(shell $(GO) env GOOS) && ARCH=$(shell $(GO) env GOARCH) && \
+	OS=$(shell GOTOOLCHAIN="$(GOTOOLCHAIN)" $(GO) env GOOS) && ARCH=$(shell GOTOOLCHAIN="$(GOTOOLCHAIN)" $(GO) env GOARCH) && \
 	curl -sSLo $(OPERATOR_SDK) https://github.com/operator-framework/operator-sdk/releases/download/$(OPERATOR_SDK_VERSION)/operator-sdk_$${OS}_$${ARCH} ;\
 	chmod +x $(OPERATOR_SDK) ;\
 	}
@@ -477,7 +512,7 @@ endif
 .PHONY: opm
 OPM = $(LOCALBIN)/opm
 OPM_VERSION ?= v1.55.0
-OPM_PLATFORM = $(shell $(GO) env GOOS)-$(shell $(GO) env GOARCH)
+OPM_PLATFORM = $(shell GOTOOLCHAIN="$(GOTOOLCHAIN)" $(GO) env GOOS)-$(shell GOTOOLCHAIN="$(GOTOOLCHAIN)" $(GO) env GOARCH)
 # sha256 of the $(OPM_VERSION) release binaries, from the release's checksums.txt
 OPM_SHA256_linux-amd64 := eed05ce8d6c21bb4acf4683f270ea7fd69ecf492cb58459c5689575c80800921
 OPM_SHA256_linux-arm64 := 4048b965d25a96bdaca5c2ca4e45418ba286391f960708e774760c7abfa509ad

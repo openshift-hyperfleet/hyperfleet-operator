@@ -1,0 +1,158 @@
+# Render outside the repository with validated image digests and random passwords.
+# The broker password must be URL-safe (e.g. random hex). Never commit rendered files.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: upgrade-database
+type: Opaque
+stringData:
+  db.host: upgrade-postgres
+  db.port: "5432"
+  db.name: hyperfleet
+  db.user: hyperfleet
+  db.password: ${UPGRADE_DB_PASSWORD}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: upgrade-postgres
+spec:
+  selector:
+    app: upgrade-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: upgrade-postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: upgrade-postgres
+  template:
+    metadata:
+      labels:
+        app: upgrade-postgres
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: ${UPGRADE_POSTGRES_IMAGE}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: POSTGRES_DB
+              value: hyperfleet
+            - name: POSTGRES_USER
+              value: hyperfleet
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: upgrade-database
+                  key: db.password
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec:
+              command: [pg_isready, -U, hyperfleet, -d, hyperfleet]
+            periodSeconds: 2
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: hyperfleet-broker-credentials
+type: Opaque
+stringData:
+  BROKER_RABBITMQ_URL: amqp://hyperfleet:${UPGRADE_BROKER_PASSWORD}@upgrade-rabbitmq:5672/
+  password: ${UPGRADE_BROKER_PASSWORD}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: upgrade-rabbitmq
+spec:
+  selector:
+    app: upgrade-rabbitmq
+  ports:
+    - port: 5672
+      targetPort: 5672
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: upgrade-rabbitmq
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: upgrade-rabbitmq
+  template:
+    metadata:
+      labels:
+        app: upgrade-rabbitmq
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: rabbitmq
+          image: ${UPGRADE_RABBITMQ_IMAGE}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: RABBITMQ_DEFAULT_USER
+              value: hyperfleet
+            - name: RABBITMQ_DEFAULT_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: hyperfleet-broker-credentials
+                  key: password
+          ports:
+            - containerPort: 5672
+          readinessProbe:
+            tcpSocket:
+              port: 5672
+            periodSeconds: 2
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/rabbitmq
+      volumes:
+        - name: data
+          emptyDir: {}

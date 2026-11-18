@@ -22,9 +22,10 @@ RUN --mount=type=cache,target=/opt/app-root/src/go/pkg/mod,uid=1001 \
 
 COPY --chown=1001:0 . .
 
+# Keep the builder's Red Hat Go compiler for FIPS; override Make's local-dev pin.
 RUN --mount=type=cache,target=/opt/app-root/src/go/pkg/mod,uid=1001 \
     --mount=type=cache,target=/opt/app-root/src/.cache/go-build,uid=1001 \
-    make build APP_VERSION=${APP_VERSION} GIT_SHA=${GIT_SHA}
+    make build GOTOOLCHAIN=local APP_VERSION=${APP_VERSION} GIT_SHA=${GIT_SHA}
 
 # Fail the build if the binary wasn't compiled with FIPS-compliant flags (see container-image-standard.md)
 RUN go version -m /build/bin/manager | grep -q "CGO_ENABLED=1" || { echo "FIPS check FAILED: missing CGO_ENABLED=1"; exit 1; }

@@ -13,7 +13,7 @@ not duplicated here.
 
 ## Prerequisites
 
-- Go 1.26.0, matching `go.mod` (the pinned golangci-lint does not support Go 1.27; on newer toolchains, prefix commands with `GOTOOLCHAIN=go1.26.0`).
+- Go 1.26.0, matching `go.mod`. Make defaults to `GOTOOLCHAIN=go1.26.0`, while honoring an explicit environment or command-line override. For direct `go` commands on a newer toolchain, use the same prefix; the pinned golangci-lint does not support Go 1.27.
 - Production builds select Go's native FIPS 140-3 module (`GOFIPS140=v1.0.0`). The `godebug fips140=on` directive in `go.mod` enables FIPS mode by default, including on the Red Hat Go toolset (which does not enable it merely by selecting the module). `GOEXPERIMENT=noboringcrypto` keeps builds compatible with toolchains where the legacy experiment was saved with `go env -w`. The Dockerfile checks both the selected module and `DefaultGODEBUG=fips140=on`.
 
   Red Hat Go toolsets use an OpenSSL backend by default on Linux with cgo.
@@ -176,6 +176,11 @@ See [Component Install Tracker](component-install-tracker.md) for latest
 requirements regarding installation of operator.
 
 ## End-to-end tests
+
+For published N−1 → N bundles on a prepared isolated cluster, use the separate
+[OLM Classic upgrade suite](upgrade-testing.md). Its ordinary helper tests run
+under `make test`; live execution requires `make test-e2e-upgrade` and explicit
+release/scenario inputs. It does not reuse the local-manager setup below.
 
 Use a dedicated Kind cluster name that contains no valuable workloads:
 

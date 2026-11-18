@@ -10,7 +10,7 @@ COPY go.mod go.mod
 COPY go.sum go.sum
 COPY Makefile Makefile
 
-RUN make build-related-images-validator
+RUN make build-related-images-validator GOTOOLCHAIN=local
 
 FROM quay.io/konflux-ci/operator-sdk-builder:latest@sha256:bc390cc52ffdd350f146932e0383e7843b509e51dde0c34d0f68b025ed6ff871 AS builder
 
