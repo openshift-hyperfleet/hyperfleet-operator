@@ -27,15 +27,21 @@ not duplicated here.
   Empty overrides are not normalized.
   The Dockerfile checks the exact `no_openssl` token.
   Make enforces `GOWORK=off` to honor `go.mod`'s FIPS default.
-  Prefer Make; direct Go commands do not inherit its defaults. Configure the same
-  settings and include the native backend tag explicitly:
+  Prefer Make; direct Go builds do not inherit its defaults. For a direct compile
+  check, configure the same settings and include the native backend tag explicitly:
 
   ```bash
   export CGO_ENABLED=1 GOEXPERIMENT=noboringcrypto GOFIPS140=v1.0.0 GOWORK=off
   # Compile check only; make build produces the service executable.
   go build -trimpath -tags=no_openssl ./...
-  go test -tags=no_openssl ./...
+  make test
   ```
+
+  Use `make test` for the non-E2E suite: it prepares `KUBEBUILDER_ASSETS` through
+  `setup-envtest`, selects the native backend, and excludes `test/e2e`. A direct
+  `go test ./...` does not perform that setup and also selects the E2E package.
+  Run live E2E separately with `make test-e2e` as described in
+  [End-to-end tests](#end-to-end-tests).
 
   Do not set `fips140ems=0` through `GODEBUG`, `godebug` in `go.mod`/`go.work`,
   or `//go:debug` in the main package: it disables TLS 1.2 EMS enforcement.
