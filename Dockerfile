@@ -22,19 +22,20 @@ RUN --mount=type=cache,target=/opt/app-root/src/go/pkg/mod,uid=1001 \
 
 COPY --chown=1001:0 . .
 
-# Keep the builder's Red Hat Go compiler for FIPS; override Make's local-dev pin.
+# Enable FIPS only in the image: select the validated module and include fips.go.
+# no_openssl selects Go's native backend; GOTOOLCHAIN=local keeps Red Hat Go.
 RUN --mount=type=cache,target=/opt/app-root/src/go/pkg/mod,uid=1001 \
     --mount=type=cache,target=/opt/app-root/src/.cache/go-build,uid=1001 \
-    make build GOTOOLCHAIN=local APP_VERSION=${APP_VERSION} GIT_SHA=${GIT_SHA}
+    GOFIPS140=v1.0.0 \
+    make build GOTOOLCHAIN=local GOFLAGS="-trimpath -tags=fips,no_openssl" APP_VERSION=${APP_VERSION} GIT_SHA=${GIT_SHA}
 
-# Fail the build if the binary wasn't compiled with FIPS-compliant flags (see container-image-standard.md)
-RUN go version -m /build/bin/manager | grep -q "CGO_ENABLED=1" || { echo "FIPS check FAILED: missing CGO_ENABLED=1"; exit 1; }
+# Check the selected module, compiled default, and startup on a simulated FIPS node.
 RUN go version -m /build/bin/manager | grep -Eq 'GOFIPS140=v1[.]0[.]0(-[[:xdigit:]]+)?$' || { echo "FIPS check FAILED: missing GOFIPS140=v1.0.0"; exit 1; }
 RUN go version -m /build/bin/manager \
     | grep -E '^[[:space:]]*build[[:space:]]+DefaultGODEBUG=([^,]*,)*fips140=on(,|$)' \
     | grep -Ev 'DefaultGODEBUG=([^,]*,)*fips140ems=0(,|$)' \
     || { echo "FIPS check FAILED: require fips140=on without fips140ems=0"; exit 1; }
-RUN go version -m /build/bin/manager | grep -Eq -- '^[[:space:]]*build[[:space:]]+-tags=([^,[:space:]]+,)*no_openssl(,[^,[:space:]]+)*[[:space:]]*$' || { echo "FIPS check FAILED: missing exact no_openssl build tag"; exit 1; }
+RUN GOLANG_FIPS=1 /build/bin/manager --help >/dev/null || { echo "FIPS check FAILED: binary does not start in FIPS mode"; exit 1; }
 
 # Runtime stage
 FROM ${BASE_IMAGE} AS final

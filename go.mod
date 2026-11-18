@@ -2,8 +2,6 @@ module github.com/openshift-hyperfleet/hyperfleet-operator
 
 go 1.26.0
 
-godebug fips140=on
-
 require (
 	github.com/blang/semver/v4 v4.0.0
 	github.com/distribution/reference v0.6.0

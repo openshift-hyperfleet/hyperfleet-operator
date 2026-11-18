@@ -14,9 +14,6 @@ export GOTOOLCHAIN ?= go1.26.0
 
 # The Go command used by every recipe.
 GO ?= go
-# Honor this module's godebug directive, not an enclosing workspace's defaults.
-override GOWORK := off
-export GOWORK
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 # Pass GOTOOLCHAIN explicitly to $(shell): Make 3.81 does not export it there.
@@ -110,7 +107,7 @@ setup-envtest: $(LOCALBIN) ## Download the envtest binaries (etcd, kube-apiserve
 
 .PHONY: test
 test: manifests generate fmt vet setup-envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use '$(ENVTEST_K8S_VERSION)' --bin-dir $(LOCALBIN) -p path)" $(GO) test -tags="$${GO_TEST_TAGS}" $$($(GO) list ./... | grep -v '/test/e2e$$') -coverprofile cover.out
+	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use '$(ENVTEST_K8S_VERSION)' --bin-dir $(LOCALBIN) -p path)" $(GO) test $$($(GO) list ./... | grep -v '/test/e2e$$') -coverprofile cover.out
 
 .PHONY: setup-test-e2e
 setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
@@ -128,7 +125,7 @@ setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
 
 .PHONY: test-e2e
 test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
-	KIND_CLUSTER=$(KIND_CLUSTER) $(GO) test -tags="$${GO_TEST_TAGS}" ./test/e2e/ -v -ginkgo.v
+	KIND_CLUSTER=$(KIND_CLUSTER) $(GO) test ./test/e2e/ -v -ginkgo.v
 	$(MAKE) cleanup-test-e2e
 
 .PHONY: cleanup-test-e2e
@@ -150,8 +147,7 @@ test-e2e-upgrade: opm ## Test a published N-1 -> N OLM Classic upgrade on a prep
 		fi; \
 	done; \
 	test -n "$$ARTIFACT_DIR" || { echo "ARTIFACT_DIR is required" >&2; exit 1; }; \
-	test_tags=$$(printf '%s' "$${GO_TEST_TAGS}" | tr '[:space:]' ','); \
-	UPGRADE_CLEANUP_ONLY=false $(GO) test -tags="upgrade_e2e,$$test_tags" ./test/e2e/upgrade -run '^TestOLMUpgrade$$' -count=1 -timeout=2h30m -v \
+	UPGRADE_CLEANUP_ONLY=false $(GO) test -tags=upgrade_e2e ./test/e2e/upgrade -run '^TestOLMUpgrade$$' -count=1 -timeout=2h30m -v \
 		-args -ginkgo.timeout=2h -ginkgo.junit-report="$$ARTIFACT_DIR/junit-upgrade.xml"
 
 .PHONY: cleanup-e2e-upgrade
@@ -162,8 +158,7 @@ cleanup-e2e-upgrade: ## Clean a retained upgrade run using its UID-bound ARTIFAC
 			printf -v "$$path_var" '%s/%s' "$$PWD" "$$path_value"; export "$$path_var"; \
 		fi; \
 	done; \
-	test_tags=$$(printf '%s' "$${GO_TEST_TAGS}" | tr '[:space:]' ','); \
-	UPGRADE_CLEANUP_ONLY=true $(GO) test -tags="upgrade_e2e,$$test_tags" ./test/e2e/upgrade -run '^TestOLMUpgrade$$' -count=1 -timeout=45m -v \
+	UPGRADE_CLEANUP_ONLY=true $(GO) test -tags=upgrade_e2e ./test/e2e/upgrade -run '^TestOLMUpgrade$$' -count=1 -timeout=45m -v \
 		-args -ginkgo.timeout=15m
 
 ##@ Lint
@@ -201,10 +196,10 @@ test-disconnected-mirror: build-oc-mirror-image ## Test catalog archive import u
 
 .PHONY: build
 build: ## Build manager binary.
-	$(GO) build $(GOFLAGS) -ldflags="-s -w -X github.com/openshift-hyperfleet/hyperfleet-operator/internal/version.version=$(APP_VERSION) -X github.com/openshift-hyperfleet/hyperfleet-operator/internal/version.commit=$(GIT_SHA)" -o bin/manager cmd/main.go
+	$(GO) build $(GOFLAGS) -ldflags="-s -w -X github.com/openshift-hyperfleet/hyperfleet-operator/internal/version.version=$(APP_VERSION) -X github.com/openshift-hyperfleet/hyperfleet-operator/internal/version.commit=$(GIT_SHA)" -o bin/manager ./cmd
 
 .PHONY: build-related-images-validator
-build-related-images-validator: ## Build the bundle validator with the module's native FIPS settings.
+build-related-images-validator: ## Build the bundle validator (build-time tooling, not a shipped service).
 	$(GO) build $(GOFLAGS) -o bin/related-images-validator ./validators/related-images/
 
 # OPERATOR_NAMESPACE is the namespace the operator creates operands in. In-cluster
@@ -214,7 +209,7 @@ OPERATOR_NAMESPACE ?= hyperfleet-system
 
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
-	OPERATOR_NAMESPACE=$(OPERATOR_NAMESPACE) $(GO) run $(GOFLAGS) ./cmd/main.go
+	OPERATOR_NAMESPACE=$(OPERATOR_NAMESPACE) $(GO) run $(GOFLAGS) ./cmd
 
 
 ##@ Container Images
@@ -246,16 +241,10 @@ GIT_DIRTY ?= $(shell [ -z "$$(git status --porcelain 2>/dev/null)" ] || echo "-m
 
 # For container builds, use linux by default; override PLATFORM to build for other platforms (e.g. linux/arm64)
 
-# Use native FIPS even when boringcrypto was persisted with go env -w.
-# go.mod's godebug fips140=on enables FIPS mode on Red Hat Go too.
+# FIPS mode is turned on only in the container image build. See the Dockerfile.
 CGO_ENABLED ?= 1
-GOEXPERIMENT ?= noboringcrypto
-GOFIPS140 ?= v1.0.0
-export CGO_ENABLED GOEXPERIMENT GOFIPS140
-GOFLAGS ?= -trimpath -tags=no_openssl
-# Keep the backend tag in tests without exporting production-only -trimpath.
-GO_TEST_TAGS ?= no_openssl
-export GO_TEST_TAGS
+export CGO_ENABLED
+GOFLAGS ?= -trimpath
 # `make run` uses `go run` directly, so it won't embed APP_VERSION/GIT_SHA (see internal/version).
 
 # shell-quote safely single-quotes $(1) for use as one shell word.
