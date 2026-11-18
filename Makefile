@@ -9,8 +9,11 @@ VERSION ?= 0.0.1
 # This is useful for CI or a project to utilize a specific version of the operator-sdk toolkit.
 OPERATOR_SDK_VERSION ?= v1.42.3
 
-# The Go command used by every recipe; toolchain detection reads the same one.
+# The Go command used by every recipe.
 GO ?= go
+# Honor this module's godebug directive, not an enclosing workspace's defaults.
+override GOWORK := off
+export GOWORK
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell $(GO) env GOBIN))
@@ -103,7 +106,7 @@ setup-envtest: $(LOCALBIN) ## Download the envtest binaries (etcd, kube-apiserve
 
 .PHONY: test
 test: manifests generate fmt vet setup-envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use '$(ENVTEST_K8S_VERSION)' --bin-dir $(LOCALBIN) -p path)" CGO_ENABLED=$(CGO_ENABLED) GOEXPERIMENT=$(GOEXPERIMENT) GOFIPS140=$(GOFIPS140) $(GO) test $$(CGO_ENABLED=$(CGO_ENABLED) GOEXPERIMENT=$(GOEXPERIMENT) GOFIPS140=$(GOFIPS140) $(GO) list ./... | grep -v /e2e) -coverprofile cover.out
+	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use '$(ENVTEST_K8S_VERSION)' --bin-dir $(LOCALBIN) -p path)" $(GO) test -tags="$(GO_TEST_TAGS)" $$($(GO) list ./... | grep -v /e2e) -coverprofile cover.out
 
 .PHONY: setup-test-e2e
 setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
@@ -121,7 +124,7 @@ setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
 
 .PHONY: test-e2e
 test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
-	KIND_CLUSTER=$(KIND_CLUSTER) CGO_ENABLED=$(CGO_ENABLED) GOEXPERIMENT=$(GOEXPERIMENT) GOFIPS140=$(GOFIPS140) $(GO) test ./test/e2e/ -v -ginkgo.v
+	KIND_CLUSTER=$(KIND_CLUSTER) $(GO) test -tags="$(GO_TEST_TAGS)" ./test/e2e/ -v -ginkgo.v
 	$(MAKE) cleanup-test-e2e
 
 .PHONY: cleanup-test-e2e
@@ -163,7 +166,7 @@ test-disconnected-mirror: build-oc-mirror-image ## Test catalog archive import u
 
 .PHONY: build
 build: ## Build manager binary.
-	CGO_ENABLED=$(CGO_ENABLED) GOEXPERIMENT=$(GOEXPERIMENT) GOFIPS140=$(GOFIPS140) $(GO) build $(GOFLAGS) -ldflags="-s -w -X github.com/openshift-hyperfleet/hyperfleet-operator/internal/version.version=$(APP_VERSION) -X github.com/openshift-hyperfleet/hyperfleet-operator/internal/version.commit=$(GIT_SHA)" -o bin/manager cmd/main.go
+	$(GO) build $(GOFLAGS) -ldflags="-s -w -X github.com/openshift-hyperfleet/hyperfleet-operator/internal/version.version=$(APP_VERSION) -X github.com/openshift-hyperfleet/hyperfleet-operator/internal/version.commit=$(GIT_SHA)" -o bin/manager cmd/main.go
 
 # OPERATOR_NAMESPACE is the namespace the operator creates operands in. In-cluster
 # it comes from the downward API; for `make run` it defaults here so local dev works.
@@ -172,7 +175,7 @@ OPERATOR_NAMESPACE ?= hyperfleet-system
 
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
-	CGO_ENABLED=$(CGO_ENABLED) GOEXPERIMENT=$(GOEXPERIMENT) GOFIPS140=$(GOFIPS140) OPERATOR_NAMESPACE=$(OPERATOR_NAMESPACE) $(GO) run $(GOFLAGS) ./cmd/main.go
+	OPERATOR_NAMESPACE=$(OPERATOR_NAMESPACE) $(GO) run $(GOFLAGS) ./cmd/main.go
 
 
 ##@ Container Images
@@ -204,41 +207,15 @@ GIT_DIRTY ?= $(shell [ -z "$$(git status --porcelain 2>/dev/null)" ] || echo "-m
 
 # For container builds, use linux by default; override PLATFORM to build for other platforms (e.g. linux/arm64)
 
-# Keep CGO enabled for the supported production image. GOFIPS140 selects
-# Go's native, validated FIPS 140-3 module; the godebug fips140=on directive
-# in go.mod enables FIPS mode by default, because the Red Hat Go toolset does
-# not enable it merely by selecting the module. Go rejects an active
-# BoringCrypto experiment when GOFIPS140 is set, so noboringcrypto is not a
-# guard: it keeps builds working where the legacy experiment was persisted
-# with "go env -w".
+# Use native FIPS even when boringcrypto was persisted with go env -w.
+# go.mod's godebug fips140=on enables FIPS mode on Red Hat Go too.
 CGO_ENABLED ?= 1
-# An empty value falls back to a persisted `go env -w CGO_ENABLED`, so pin it.
-ifeq ($(strip $(CGO_ENABLED)),)
-override CGO_ENABLED := 1
-endif
 GOEXPERIMENT ?= noboringcrypto
 GOFIPS140 ?= v1.0.0
-# An empty value falls back to the persisted `go env -w` setting, so pin both.
-ifeq ($(strip $(GOEXPERIMENT)),)
-override GOEXPERIMENT := noboringcrypto
-endif
-ifeq ($(strip $(GOFIPS140)),)
-override GOFIPS140 := v1.0.0
-endif
-GOFLAGS ?= -trimpath
-# Red Hat Go toolsets use the OpenSSL crypto backend by default on linux+cgo.
-# That backend aborts at startup on FIPS-enabled hosts once a fips140 GODEBUG
-# value is set, so those toolchains must build with Go's native backend.
-ifneq (,$(findstring Red Hat,$(shell $(GO) version 2>/dev/null)))
-# A second -tags flag replaces the first, so merge with any caller-supplied list.
-# Repeated -tags options keep the last list, so merge into that one.
-GOFLAGS_CALLER_TAGS := $(patsubst -tags=%,%,$(lastword $(filter -tags=%,$(GOFLAGS))))
-ifeq (,$(GOFLAGS_CALLER_TAGS))
-override GOFLAGS += -tags=no_openssl
-else
-override GOFLAGS := $(filter-out -tags=%,$(GOFLAGS)) -tags=$(GOFLAGS_CALLER_TAGS),no_openssl
-endif
-endif
+export CGO_ENABLED GOEXPERIMENT GOFIPS140
+GOFLAGS ?= -trimpath -tags=no_openssl
+# Keep the backend tag in tests without exporting production-only -trimpath.
+GO_TEST_TAGS ?= no_openssl
 # `make run` uses `go run` directly, so it won't embed APP_VERSION/GIT_SHA (see internal/version).
 
 # shell-quote safely single-quotes $(1) for use as one shell word.
