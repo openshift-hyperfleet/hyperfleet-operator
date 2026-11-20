@@ -5,6 +5,8 @@ WORKDIR /workdir
 RUN chown 1001:0 /workdir
 USER 1001
 
+ENV GOCACHE=/tmp/go-build GOMODCACHE=/tmp/go-mod
+
 COPY validators/ ./validators/
 COPY go.mod go.mod
 COPY go.sum go.sum

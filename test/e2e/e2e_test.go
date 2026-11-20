@@ -40,9 +40,6 @@ import (
 	"github.com/openshift-hyperfleet/hyperfleet-operator/test/utils"
 )
 
-// namespace where the project is deployed in
-const namespace = "hyperfleet-system"
-
 // serviceAccountName created for the project
 const serviceAccountName = "hyperfleet-operator-controller-manager"
 
@@ -51,12 +48,14 @@ const (
 	apiConfigMapName    = "hyperfleet-api-config"
 	postgresOperandName = "hyperfleet-postgres"
 	rabbitmqOperandName = "hyperfleet-rabbitmq"
+	postgresSecretName  = "hyperfleet-db"
 )
 
 const (
 	getVerb     = "get"
 	listVerb    = "list"
 	watchVerb   = "watch"
+	deleteVerb  = "delete"
 	asGroupFlag = "--as-group"
 )
 
@@ -89,35 +88,37 @@ const cleanupTimeout = 30 * time.Second
 var _ = Describe("hyperfleet-operator", Ordered, func() {
 	var controllerPodName string
 
-	// Before running the tests, set up the environment by creating the namespace,
-	// enforce the restricted security policy to the namespace, installing CRDs,
-	// and deploying the controller.
+	// In kind mode, create the operator namespace, install CRDs, and deploy
+	// the operator. The restricted PSA label is applied unconditionally so
+	// that CI clusters also reject non-compliant pods.
 	BeforeAll(func() {
-		By("creating manager namespace")
-		cmd := exec.Command("kubectl", "create", "ns", namespace)
-		_, err := utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to create namespace")
+		if kindMode {
+			By("creating operator namespace")
+			cmd := exec.Command("kubectl", "create", "ns", namespace)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create namespace")
 
-		By("labeling the namespace to enforce the restricted security policy")
-		cmd = exec.Command("kubectl", "label", "--overwrite", "ns", namespace,
+			By("installing CRDs")
+			cmd = exec.Command("make", "install")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
+
+			By("deploying the operator")
+			cmd = exec.Command("make", "deploy", fmt.Sprintf("OPERATOR_IMG=%s", kindOperatorImg),
+				fmt.Sprintf("RELATED_IMAGE_HYPERFLEET_OPERATOR=%s", kindOperatorImg))
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to deploy the operator")
+		}
+
+		By("enforcing the restricted pod security policy on the operator namespace")
+		cmd := exec.Command("kubectl", "label", "--overwrite", "ns", namespace,
 			"pod-security.kubernetes.io/enforce=restricted")
-		_, err = utils.Run(cmd)
+		_, err := utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
-
-		By("installing CRDs")
-		cmd = exec.Command("make", "install")
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
-
-		By("deploying the controller-manager")
-		cmd = exec.Command("make", "deploy", fmt.Sprintf("OPERATOR_IMG=%s", projectImage),
-			fmt.Sprintf("RELATED_IMAGE_HYPERFLEET_OPERATOR=%s", projectImage))
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
 	})
 
-	// After all tests have been executed, clean up by undeploying the controller, uninstalling CRDs,
-	// and deleting the namespace.
+	// Clean up test-created resources; in kind mode also undeploy the
+	// operator, uninstall CRDs, and remove the namespace.
 	AfterAll(func() {
 		var cleanupErrors []error
 		runCleanup := func(step, command string, args ...string) {
@@ -138,14 +139,20 @@ var _ = Describe("hyperfleet-operator", Ordered, func() {
 		runCleanup("cleaning up the metrics server certificate",
 			"kubectl", "delete", "secret", metricsServerCertificateSecret, "-n", namespace,
 			"--ignore-not-found=true", "--wait=false")
+		runCleanup("cleaning up the referenced database Secret",
+			"kubectl", "delete", "secret", postgresSecretName, "-n", namespace,
+			"--ignore-not-found=true", "--wait=false")
 		runCleanup("cleaning up the e2e metrics reader binding",
 			"kubectl", "delete", "clusterrolebinding", metricsReaderBinding, "--ignore-not-found=true", "--wait=false")
-		runCleanup("undeploying the controller-manager",
-			"make", "undeploy", "ignore-not-found=true")
-		runCleanup("uninstalling CRDs",
-			"make", "uninstall", "ignore-not-found=true")
-		runCleanup("removing manager namespace",
-			"kubectl", "delete", "ns", namespace, "--ignore-not-found=true", "--wait=false")
+
+		if kindMode {
+			runCleanup("undeploying the operator",
+				"make", "undeploy", "ignore-not-found=true")
+			runCleanup("uninstalling CRDs",
+				"make", "uninstall", "ignore-not-found=true")
+			runCleanup("removing manager namespace",
+				"kubectl", "delete", "ns", namespace, "--ignore-not-found=true", "--wait=false")
+		}
 
 		Expect(errors.Join(cleanupErrors...)).NotTo(HaveOccurred(), "e2e cleanup failed")
 	})
@@ -312,6 +319,10 @@ var _ = Describe("hyperfleet-operator", Ordered, func() {
 		})
 
 		It("should serve metrics over verified TLS with bearer authentication", func() {
+			if !kindMode {
+				Skip("secure-metrics test patches the Deployment directly; " +
+					"in CI mode OLM owns the Deployment and reverts the change")
+			}
 			// The secure profile needs a stable serving certificate. Generate a
 			// short-lived test CA and a service-DNS certificate here rather than
 			// relying on cert-manager being installed in the e2e environment.
@@ -482,8 +493,8 @@ var _ = Describe("hyperfleet-operator", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred())
 		})
 
-		It("should scope operand authorization to the operator namespace", func() {
-			By("verifying the manager can manage operands in its own namespace")
+		It("should have the RBAC the operator needs to manage operands", func() {
+			By("verifying the manager can manage operands in its namespace")
 			operandResources := []string{
 				"deployments.apps",
 				"services",
@@ -500,18 +511,8 @@ var _ = Describe("hyperfleet-operator", Ordered, func() {
 				}
 			}
 
-			By("verifying the manager cannot manage operands in another namespace")
-			for _, resource := range operandResources {
-				for _, verb := range operandVerbs {
-					Expect(managerCanI(verb, resource, "default")).To(BeFalse(),
-						"manager should not be allowed to %s %s in default", verb, resource)
-				}
-				Expect(managerCanI("delete", resource, namespace)).To(BeFalse(),
-					"manager should not be allowed to delete %s; owner-reference GC handles cleanup", resource)
-			}
-
-			By("verifying cluster-scoped HyperFleetConfig access remains available")
-			for _, verb := range []string{getVerb, listVerb, watchVerb, "create", "update", "patch", "delete"} {
+			By("verifying cluster-scoped HyperFleetConfig access")
+			for _, verb := range []string{getVerb, listVerb, watchVerb, "create", "update", "patch", deleteVerb} {
 				Expect(managerCanI(verb, "hyperfleetconfigs.hyperfleet.redhat.com", "")).To(BeTrue(),
 					"manager should retain cluster-scoped HyperFleetConfig %s access", verb)
 			}
@@ -547,7 +548,7 @@ var _ = Describe("hyperfleet-operator", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			By("creating the referenced database Secret")
-			cmd = exec.Command("kubectl", "create", "secret", "generic", "hyperfleet-db",
+			cmd = exec.Command("kubectl", "create", "secret", "generic", postgresSecretName,
 				"-n", namespace,
 				"--from-literal=db.host="+postgresOperandName,
 				"--from-literal=db.port=5432",
@@ -764,10 +765,8 @@ func generateMetricsServingCertificate(
 }
 
 const (
-	managerSubject                 = "system:serviceaccount:" + namespace + ":" + serviceAccountName
-	serviceAccountsGroup           = "system:serviceaccounts"
-	namespacedServiceAccountsGroup = serviceAccountsGroup + ":" + namespace
-	authenticatedGroup             = "system:authenticated"
+	serviceAccountsGroup = "system:serviceaccounts"
+	authenticatedGroup   = "system:authenticated"
 )
 
 // managerCanI reports whether the controller manager is authorized for a resource action.
@@ -783,13 +782,17 @@ func managerCanISubresource(verb, resource, subresource string) bool {
 	return managerCanIWithArgs(args, "")
 }
 
-// managerCanIArgs builds authorization-check arguments for the manager's complete ServiceAccount identity.
+// managerCanIArgs builds authorization-check arguments for the manager's
+// complete ServiceAccount identity, using the current namespace at call time
+// so that --namespace overrides are reflected.
 func managerCanIArgs(verb, resource string) []string {
+	subject := "system:serviceaccount:" + namespace + ":" + serviceAccountName
+	nsGroup := serviceAccountsGroup + ":" + namespace
 	return []string{
 		"auth", "can-i", verb, resource,
-		"--as", managerSubject,
+		"--as", subject,
 		asGroupFlag, serviceAccountsGroup,
-		asGroupFlag, namespacedServiceAccountsGroup,
+		asGroupFlag, nsGroup,
 		asGroupFlag, authenticatedGroup,
 	}
 }

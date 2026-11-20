@@ -25,8 +25,8 @@ not duplicated here.
   Use `make test` for the non-E2E suite: it prepares `KUBEBUILDER_ASSETS` through
   `setup-envtest` and excludes `test/e2e`. A direct
   `go test ./...` does not perform that setup and also selects the E2E package.
-  Run live E2E separately with `make test-e2e` as described in
-  [End-to-end tests](#end-to-end-tests).
+  Run live E2E separately with `make test-e2e-kind` or `make test-e2e-ci` as
+  described in [End-to-end tests](#end-to-end-tests).
 
   Do not set `fips140ems=0` through `GODEBUG`, `godebug` in `go.mod`/`go.work`,
   or `//go:debug` in the main package: it disables TLS 1.2 EMS enforcement.
@@ -163,38 +163,55 @@ requirements regarding installation of operator.
 
 ## End-to-end tests
 
-For published N−1 → N bundles on a prepared isolated cluster, use the separate
-[OLM Classic upgrade suite](upgrade-testing.md). Its ordinary helper tests run
-under `make test`; live execution requires `make test-e2e-upgrade` and explicit
-release/scenario inputs. It does not reuse the local-manager setup below.
-
+### E2E - Kind
 Use a dedicated Kind cluster name that contains no valuable workloads:
 
 ```sh
-make test-e2e KIND_CLUSTER=hyperfleet-operator-dev
+make test-e2e-kind KIND_CLUSTER=hyperfleet-operator-dev
 ```
 
-The target creates the named cluster only when it does not already exist,
-builds and loads the manager image through Docker, installs the generated CRD
-and manager, installs cert-manager by default, and runs the Ginkgo suite. On a
-successful run it deletes the selected Kind cluster. This means an existing
-same-named cluster is reused and then deleted; never point the target at a
-shared cluster.
+The target creates the named cluster only when it does not already exist.
+The testing portion executes `KIND_CLUSTER=$(KIND_CLUSTER) $(GO) test ./test/e2e/ -v -ginkgo.v --kind-mode=true --skip-cert-manager-install=$(SKIP_CERT_MANAGER_INSTALL)`
 
-If the Go test command fails, Make stops before the cleanup recipe. Preserve any
+`--kind-mode=true` requests the kind flow and requires building and loading the operator image (`make image`), installing the CRDs (`make install`), and deploying the operator manifests (`make deploy`).
+
+`--skip-cert-manager-install=$(SKIP_CERT_MANAGER_INSTALL)` indicates if we want to install the cert manager or not. Set `SKIP_CERT_MANAGER_INSTALL=true` only when a compatible cert-manager is
+already present or the scenario does not require it.
+
+The suite requires KUBECONFIG to be set; kind writes the cluster context into the file it points at.
+
+On a successful run the target deletes the selected Kind cluster. An existing
+same-named cluster is reused and then deleted too, so never point the target
+at a shared or valuable cluster. If the Go test command fails, Make stops before the cleanup recipe. Preserve any
 useful diagnostics, then remove the dedicated cluster explicitly:
 
 ```sh
-make cleanup-test-e2e KIND_CLUSTER=hyperfleet-operator-dev
+make destroy-kind-cluster KIND_CLUSTER=hyperfleet-operator-dev
 ```
 
-The e2e suite gathers pod logs, events, and resource descriptions on failure.
-Set `CERT_MANAGER_INSTALL_SKIP=true` only when a compatible cert-manager is
-already present or the scenario does not require it:
+### E2E - CI
 
 ```sh
-make test-e2e KIND_CLUSTER=hyperfleet-operator-dev CERT_MANAGER_INSTALL_SKIP=true
+make test-e2e-ci
 ```
+
+Executes `go test ./test/e2e/ -v -ginkgo.v --kind-mode=false --namespace=$(OPERATOR_NAMESPACE)`
+
+`--kind-mode=false` indicates that we are not running on a kind cluster, and the aforementioned steps do not happen, in fact we assume that the cluster we are running on already has all the operator manifests and CRDs installed and running.
+
+`--namespace=$(OPERATOR_NAMESPACE)` is the namespace the operator and its
+resources were installed into. It defaults to `hyperfleet-system` and must be
+overridden if the target cluster installed them elsewhere, e.g.
+`make test-e2e-ci OPERATOR_NAMESPACE=...`.
+
+We run this target as a step in the presubmit prow job. A cluster should be provisioned and KUBECONFIG points to it, the job has already built the operator and bundle and run `operator-sdk run bundle ...` before we run this target.
+
+
+### E2E - Upgrades
+For published N−1 → N bundles on a prepared isolated cluster, use the separate
+[OLM Classic upgrade suite](upgrade-testing.md). Its ordinary helper tests run
+under `make test`; live execution requires `make test-e2e-upgrade` and explicit
+release/scenario inputs.
 
 ## Generated and release-facing files
 
@@ -217,6 +234,6 @@ minimum:
 |---|---|
 | `make bundle-build` cannot find `envsubst` | Install gettext. The development bundle overlay is generated from `config/manifests/dev/patch-images.yaml` with `envsubst`; the generated `kustomization.yaml` is ignored by Git. |
 | Controller tests cannot start envtest | Run `make test` with network access so `setup-envtest` can obtain the Kubernetes control-plane binaries matching the Go module's Kubernetes dependencies. |
-| An e2e run leaves a Kind cluster behind | Preserve the failure diagnostics, then run `make cleanup-test-e2e KIND_CLUSTER=<dedicated-cluster-name>`. Do not use a shared or valuable cluster name: the normal successful path deletes it too. |
+| An e2e run leaves a Kind cluster behind | Preserve the failure diagnostics, then run `make destroy-kind-cluster KIND_CLUSTER=<dedicated-cluster-name>`. Do not use a shared or valuable cluster name: the normal successful path deletes it too. |
 | Generated files change unexpectedly | Run `make manifests generate`, inspect the diff, and keep only changes caused by the API, RBAC, or controller markers you intentionally changed. |
 | `make run` cannot reconcile the sample | Confirm that `OPERATOR_NAMESPACE` exists and contains the referenced Secrets, then check that the database is reachable from the manager and API workloads. |

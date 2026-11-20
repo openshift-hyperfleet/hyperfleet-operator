@@ -3,7 +3,7 @@
 The `test/e2e/upgrade` suite implements the operator-side N−1 → N checks for
 HYPERFLEET-1413. It installs published bundles through OLM Classic on a prepared,
 isolated cluster. It does not build the operator or install this checkout's CRDs.
-The existing `make test-e2e` suite continues to test a locally built manager.
+The existing `make test-e2e-kind` suite continues to test a locally built manager.
 
 ## Operand upgrade policy
 

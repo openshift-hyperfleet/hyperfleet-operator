@@ -92,14 +92,8 @@ go-vet: vet ## Alias for vet (used by the hyperfleet-go-vet pre-commit hook).
 install-hooks: ## Install pre-commit hooks.
 	pre-commit install
 
-##@ Testing
+##@ Unit/Integration Testing
 ENVTEST_K8S_VERSION ?= $(shell GOTOOLCHAIN="$(GOTOOLCHAIN)" $(GO) list -m -f "{{ .Version }}" k8s.io/api | awk -F'[v.]' '{printf "1.%d", $$3}')
-KIND_CLUSTER ?= hyperfleet-operator-test-e2e
-
-# TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
-# The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.
-# CertManager is installed by default; skip with:
-# - CERT_MANAGER_INSTALL_SKIP=true
 
 .PHONY: setup-envtest
 setup-envtest: $(LOCALBIN) ## Download the envtest binaries (etcd, kube-apiserver) into the local bin directory.
@@ -109,12 +103,21 @@ setup-envtest: $(LOCALBIN) ## Download the envtest binaries (etcd, kube-apiserve
 test: manifests generate fmt vet setup-envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use '$(ENVTEST_K8S_VERSION)' --bin-dir $(LOCALBIN) -p path)" $(GO) test $$($(GO) list ./... | grep -v '/test/e2e$$') -coverprofile cover.out
 
-.PHONY: setup-test-e2e
-setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
+
+##@ E2E Cluster Testing
+
+# Kind Targets
+KIND_CLUSTER ?= hyperfleet-operator-test-e2e
+
+.PHONY: check-kind
+check-kind: ## Check if Kind is installed, exit with error if not.
 	@command -v $(KIND) >/dev/null 2>&1 || { \
 		echo "Kind is not installed. Please install Kind manually."; \
 		exit 1; \
 	}
+
+.PHONY: setup-kind-cluster
+setup-kind-cluster: check-kind ## Set up a Kind cluster for e2e tests if it does not exist
 	@case "$$($(KIND) get clusters)" in \
 		*"$(KIND_CLUSTER)"*) \
 			echo "Kind cluster '$(KIND_CLUSTER)' already exists. Skipping creation." ;; \
@@ -123,18 +126,45 @@ setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
 			$(KIND) create cluster --name $(KIND_CLUSTER) ;; \
 	esac
 
-.PHONY: test-e2e
-test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
-	KIND_CLUSTER=$(KIND_CLUSTER) $(GO) test ./test/e2e/ -v -ginkgo.v
-	$(MAKE) cleanup-test-e2e
+.PHONY: destroy-kind-cluster
+destroy-kind-cluster: check-kind ## Destroy the Kind cluster used for e2e tests
+	$(KIND) delete cluster --name $(KIND_CLUSTER)
 
-.PHONY: cleanup-test-e2e
-cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
-	@$(KIND) delete cluster --name $(KIND_CLUSTER)
+.PHONY: pre-e2e-checks
+pre-e2e-checks: ## Check for required environment variables and files for e2e tests.
+	@if [ -z "$$KUBECONFIG" ]; then \
+		echo "ERROR: KUBECONFIG must be set to the target cluster's kubeconfig."; \
+		exit 1; \
+	fi
+	@if [ ! -f "$$KUBECONFIG" ]; then \
+		echo "ERROR: KUBECONFIG file $$KUBECONFIG does not exist."; \
+		exit 1; \
+	fi
 
-# Prepared-cluster OLM tests consume published artifacts. They must not invoke
-# setup-test-e2e, build a replacement manager, or install locally generated CRDs.
-# The build tag keeps live execution out of ordinary unit tests and make test.
+# Within test-e2e-kind, --skip-cert-manager-install=false; enable only when a compatible
+# cert-manager is already present.
+SKIP_CERT_MANAGER_INSTALL ?= false
+.PHONY: test-e2e-kind
+test-e2e-kind: setup-kind-cluster manifests generate fmt vet pre-e2e-checks ## Run the e2e tests in a kind-cluster
+	KIND_CLUSTER=$(KIND_CLUSTER) $(GO) test ./test/e2e/ -v -ginkgo.v --kind-mode=true --skip-cert-manager-install=$(SKIP_CERT_MANAGER_INSTALL)
+	$(MAKE) destroy-kind-cluster KIND_CLUSTER=$(KIND_CLUSTER)
+
+# Requires KUBECONFIG pointing at a cluster where the operator is already
+# running (e.g. installed via operator-sdk run bundle). The bundle install
+# provides the namespace, CRDs, RBAC, and deployment; this target does not
+# create or install any of them.
+.PHONY: test-e2e-ci
+test-e2e-ci: manifests generate fmt vet pre-e2e-checks ## Run the e2e tests against a cluster with the operator already installed. Requires KUBECONFIG.
+	$(GO) test ./test/e2e/ -v -ginkgo.v --kind-mode=false --namespace=$(OPERATOR_NAMESPACE)
+
+##@ Upgrade Testing
+
+# The OLM upgrade suite runs against a prepared cluster and consumes
+# published bundle/catalog images.
+# It does not run the operator image build, test-e2e-kind, or deploy local CRDS
+# Only the live entrypoint (upgrade_e2e_test.go) carries the upgrade_e2e build
+# tag, so `make test` runs the package's helper unit tests while the
+# 2h+ live upgrade is excluded unless invoked via -tags=upgrade_e2e.
 export KUBECONFIG OLM_CATALOG_IMAGE UPGRADE_FROM_BUNDLE UPGRADE_TO_BUNDLE OLM_CHANNEL
 export UPGRADE_SCENARIO UPGRADE_NAMESPACE UPGRADE_TIMEOUT UPGRADE_RETAIN_ON_SUCCESS OPM PODMAN ARTIFACT_DIR
 

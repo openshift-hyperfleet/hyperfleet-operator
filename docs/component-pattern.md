@@ -227,7 +227,7 @@ Run these from the repository root:
 make manifests generate
 make lint
 make test
-make test-e2e KIND_CLUSTER=hyperfleet-operator-component-dev
+make test-e2e-kind KIND_CLUSTER=hyperfleet-operator-component-dev
 ```
 
 Use a dedicated e2e cluster name; the successful target deletes it, while a

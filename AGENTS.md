@@ -67,6 +67,8 @@ toolchain incompatibility. The Makefile invokes tools pinned in `tools/go.mod`.
 | `make test` | Regenerate, format, vet, obtain matching envtest assets, and run all non-E2E Go packages with coverage. |
 | `make build` | Compile the manager into `bin/manager`. |
 | `make run OPERATOR_NAMESPACE=hyperfleet-system` | Run locally against the current kubeconfig; requires dependencies and Secrets. |
+| `make test-e2e-kind KIND_CLUSTER=<name>` | Run live E2E in a dedicated, disposable Kind cluster (created or reused by name, deleted on success). Requires `KUBECONFIG` to be set. |
+| `make test-e2e-ci` | Run live E2E against the cluster `KUBECONFIG` points at; assumes the operator is already installed there. |
 | `pre-commit run --all-files` | Run pre-commit-stage checks; commit-msg validation is separate. |
 
 Run lint, `make test`, and build before requesting review. Inspect the diff
@@ -81,11 +83,17 @@ Change the source markers and regenerate instead.
 - `test/e2e` contains Kind-based Ginkgo tests plus ordinary Go helper tests.
   `make test` excludes this package. Run its helper tests explicitly when
   changing them; compile or dry-run alone is not live E2E validation.
-- For controller, operand, or deployment behavior changes, run
-  `make test-e2e KIND_CLUSTER=<dedicated-disposable-name>` with the required
-  container runtime and cluster tools. The target reuses an existing named
-  cluster and deletes it on success. Never choose a shared cluster. On failure,
-  preserve diagnostics before `make cleanup-test-e2e KIND_CLUSTER=<same-name>`.
+- For controller, operand, or deployment behavior changes:
+  locally run `make test-e2e-kind KIND_CLUSTER=<kind-cluster-name>` with the
+  required container runtime and cluster tools; set
+  `KIND_EXPERIMENTAL_PROVIDER=podman` to override the kind provider to podman.
+  CI runs `make test-e2e-ci` on every presubmit job.
+- The `kindMode` flag selects the self-managed kind flow: when set, the suite
+  builds the operator image as `localhost/hyperfleet-operator:dev-local`,
+  loads it into the kind cluster (created or reused by name), and deploys the
+  operator with `make install` and `make deploy` during the test run. Without
+  it, the test assumes the operator, CRDs, and resources are already
+  installed and running on the target cluster.
 - For documentation-only changes, validate links, commands, and source claims;
   report which code checks ran and whether envtest or live E2E was not run.
 

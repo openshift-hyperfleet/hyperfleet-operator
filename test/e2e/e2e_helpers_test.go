@@ -64,24 +64,32 @@ func TestInvalidBearerTokenLogPattern(t *testing.T) {
 	}
 }
 
+const (
+	containerToolDocker = "docker"
+	containerToolPodman = "podman"
+)
+
 func TestManagerImageBuildArgs(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		provider     string
-		containerArg string
+		arch          string
+		containerTool string
+		wantSuffix    string
 	}{
-		{provider: ""},
-		{provider: "docker"},
-		{provider: "podman", containerArg: "CONTAINER_TOOL=podman"},
-		{provider: "nerdctl"},
+		{arch: "arm64", containerTool: containerToolDocker, wantSuffix: containerToolDocker},
+		{arch: "arm64", containerTool: "", wantSuffix: containerToolDocker},
+		{arch: "amd64", containerTool: containerToolPodman, wantSuffix: containerToolPodman},
+		{arch: "amd64", containerTool: containerToolDocker, wantSuffix: containerToolDocker},
 	} {
-		t.Run(tc.provider, func(t *testing.T) {
-			want := []string{"image", fmt.Sprintf("OPERATOR_IMG=%s", projectImage)}
-			if tc.containerArg != "" {
-				want = append(want, tc.containerArg)
+		t.Run(tc.arch+tc.containerTool, func(t *testing.T) {
+			want := []string{
+				"image",
+				fmt.Sprintf("OPERATOR_IMG=%s", kindOperatorImg),
+				fmt.Sprintf("PLATFORM=linux/%s", tc.arch),
+				fmt.Sprintf("CONTAINER_TOOL=%s", tc.wantSuffix),
 			}
-			if got := managerImageBuildArgs(tc.provider); !reflect.DeepEqual(got, want) {
-				t.Errorf("managerImageBuildArgs(%q) = %v, want %v", tc.provider, got, want)
+			if got := managerImageBuildArgs(kindOperatorImg, tc.arch, tc.containerTool); !reflect.DeepEqual(got, want) {
+				t.Errorf("managerImageBuildArgs(%q) = %v, want %v", tc.wantSuffix, got, want)
 			}
 		})
 	}
@@ -178,11 +186,17 @@ func TestParseCanIOutput(t *testing.T) {
 func TestManagerCanIArgs(t *testing.T) {
 	t.Parallel()
 
+	// managerCanIArgs reads the package-level namespace var at call time;
+	// pin it to a known value so the test is independent of --namespace.
+	origNamespace := namespace
+	namespace = "test-ns"
+	t.Cleanup(func() { namespace = origNamespace })
+
 	want := []string{
 		"auth", "can-i", getVerb, "deployments.apps",
-		"--as", "system:serviceaccount:hyperfleet-system:hyperfleet-operator-controller-manager",
+		"--as", "system:serviceaccount:test-ns:hyperfleet-operator-controller-manager",
 		asGroupFlag, "system:serviceaccounts",
-		asGroupFlag, "system:serviceaccounts:hyperfleet-system",
+		asGroupFlag, "system:serviceaccounts:test-ns",
 		asGroupFlag, "system:authenticated",
 	}
 	if got := managerCanIArgs(getVerb, "deployments.apps"); !reflect.DeepEqual(got, want) {
