@@ -511,6 +511,18 @@ var _ = Describe("hyperfleet-operator", Ordered, func() {
 				}
 			}
 
+			if kindMode {
+				By("verifying the manager cannot manage operands in another namespace")
+				for _, resource := range operandResources {
+					for _, verb := range operandVerbs {
+						Expect(managerCanI(verb, resource, "default")).To(BeFalse(),
+							"manager should not be allowed to %s %s in default", verb, resource)
+					}
+					Expect(managerCanI("delete", resource, namespace)).To(BeFalse(),
+						"manager should not be allowed to delete %s; owner-reference GC handles cleanup", resource)
+				}
+			}
+
 			By("verifying cluster-scoped HyperFleetConfig access")
 			for _, verb := range []string{getVerb, listVerb, watchVerb, "create", "update", "patch", deleteVerb} {
 				Expect(managerCanI(verb, "hyperfleetconfigs.hyperfleet.redhat.com", "")).To(BeTrue(),
