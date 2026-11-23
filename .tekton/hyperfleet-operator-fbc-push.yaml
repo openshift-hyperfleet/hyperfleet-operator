@@ -7,8 +7,10 @@ metadata:
     build.appstudio.redhat.com/target_branch: '{{target_branch}}'
     pipelinesascode.tekton.dev/cancel-in-progress: "false"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
-    pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch
-      == "main"
+    pipelinesascode.tekton.dev/on-cel-expression: |
+      event == "push" && target_branch
+       == "main" && (".tekton/hyperfleet-operator-fbc-push.yaml".pathChanged() ||
+       "catalog.Dockerfile".pathChanged() || "catalog/***".pathChanged() )
   labels:
     appstudio.openshift.io/application: hyperfleet-fbc
     appstudio.openshift.io/component: hyperfleet-operator-fbc
@@ -209,9 +211,16 @@ spec:
       - name: ociArtifactExpiresAfter
         value: $(params.image-expires-after)
       - name: OPM_ARGS
-        value: []
+        value:
+        - alpha
+        - render-template
+        - basic
+        - --migrate-level=bundle-object-to-csv-metadata
+        - -o
+        - yaml
+        - catalog/konflux-template.yaml
       - name: OPM_OUTPUT_PATH
-        value: ""
+        value: catalog/hyperfleet-operator/catalog.yaml
       - name: IDMS_PATH
         value: ""
       runAfter:

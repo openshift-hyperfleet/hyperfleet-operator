@@ -212,9 +212,16 @@ spec:
       - name: ociArtifactExpiresAfter
         value: $(params.image-expires-after)
       - name: OPM_ARGS
-        value: []
+        value:
+        - alpha
+        - render-template
+        - basic
+        - --migrate-level=bundle-object-to-csv-metadata
+        - -o
+        - yaml
+        - catalog/konflux-template.yaml
       - name: OPM_OUTPUT_PATH
-        value: ""
+        value: catalog/hyperfleet-operator/catalog.yaml
       - name: IDMS_PATH
         value: ""
       runAfter:
