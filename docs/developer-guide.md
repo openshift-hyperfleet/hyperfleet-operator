@@ -164,26 +164,21 @@ requirements regarding installation of operator.
 ## End-to-end tests
 
 ### E2E - Kind
-Use a dedicated Kind cluster name that contains no valuable workloads:
 
 ```sh
 make test-e2e-kind KIND_CLUSTER=hyperfleet-operator-dev
 ```
 
-The target creates the named cluster only when it does not already exist.
-The testing portion executes `KIND_CLUSTER=$(KIND_CLUSTER) $(GO) test ./test/e2e/ -v -ginkgo.v --kind-mode=true --skip-cert-manager-install=$(SKIP_CERT_MANAGER_INSTALL)`
+The target creates the named Kind cluster only when it does not already exist. The suite requires KUBECONFIG to be set; kind writes the cluster context into the file it points at.
+With `--kind-mode=true` the test suite handles building and loading the operator image (`make image`), installing the CRDs (`make install`), and deploying the operator manifests (`make deploy`).
 
-`--kind-mode=true` requests the kind flow and requires building and loading the operator image (`make image`), installing the CRDs (`make install`), and deploying the operator manifests (`make deploy`).
+`SKIP_CERT_MANAGER_INSTALL` is used to indicate whether the cert-manager should be installed or not. Set `SKIP_CERT_MANAGER_INSTALL=true` only when a compatible cert-manager is already present or the scenario does not require it:
 
-`--skip-cert-manager-install=$(SKIP_CERT_MANAGER_INSTALL)` indicates if we want to install the cert manager or not. Set `SKIP_CERT_MANAGER_INSTALL=true` only when a compatible cert-manager is
-already present or the scenario does not require it.
+```sh
+make test-e2e-kind KIND_CLUSTER=hyperfleet-operator-dev SKIP_CERT_MANAGER_INSTALL=true
+```
 
-The suite requires KUBECONFIG to be set; kind writes the cluster context into the file it points at.
-
-On a successful run the target deletes the selected Kind cluster. An existing
-same-named cluster is reused and then deleted too, so never point the target
-at a shared or valuable cluster. If the Go test command fails, Make stops before the cleanup recipe. Preserve any
-useful diagnostics, then remove the dedicated cluster explicitly:
+The test suite runs to completion or failure. On completion the Kind cluster gets deleted. On failure, the cleanup step is skipped and cluster can be debugged. Preserve any useful diagnostics, then remove the dedicated cluster explicitly:
 
 ```sh
 make destroy-kind-cluster KIND_CLUSTER=hyperfleet-operator-dev
@@ -195,19 +190,20 @@ make destroy-kind-cluster KIND_CLUSTER=hyperfleet-operator-dev
 make test-e2e-ci
 ```
 
-Executes `go test ./test/e2e/ -v -ginkgo.v --kind-mode=false --namespace=$(OPERATOR_NAMESPACE)`
+We run this target as a step in the presubmit prow job. A cluster will be "claimed" and KUBECONFIG points to it. The job has already built the operator and bundle and run `operator-sdk run bundle ...` before we run this target. We assume that the operator manifests and CRDs are installed and running, so the aforementioned steps in [the Kind flow above](#e2e---kind) are skipped.
 
-`--kind-mode=false` indicates that we are not running on a kind cluster, and the aforementioned steps do not happen, in fact we assume that the cluster we are running on already has all the operator manifests and CRDs installed and running.
-
-`--namespace=$(OPERATOR_NAMESPACE)` is the namespace the operator and its
+`OPERATOR_NAMESPACE` is the namespace the operator and its
 resources were installed into. It defaults to `hyperfleet-system` and must be
 overridden if the target cluster installed them elsewhere, e.g.
-`make test-e2e-ci OPERATOR_NAMESPACE=...`.
 
-We run this target as a step in the presubmit prow job. A cluster should be provisioned and KUBECONFIG points to it, the job has already built the operator and bundle and run `operator-sdk run bundle ...` before we run this target.
+```sh
+make test-e2e-ci OPERATOR_NAMESPACE=...
+```
 
+If the test has completed successfully, the presubmit job will pass. If not the logs from the prow run will be logged in the PR checks section.
 
 ### E2E - Upgrades
+
 For published N−1 → N bundles on a prepared isolated cluster, use the separate
 [OLM Classic upgrade suite](upgrade-testing.md). Its ordinary helper tests run
 under `make test`; live execution requires `make test-e2e-upgrade` and explicit
