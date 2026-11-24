@@ -33,7 +33,7 @@ spec:
     - name: path-context
       value: .
     - name: target-branch
-      value: '{{target_branch}}'
+      value: "{{target_branch}}"
   pipelineSpec:
     description: |
       This pipeline is ideal for building and verifying [file-based catalogs](https://konflux-ci.dev/docs/end-to-end/building-olm/#building-the-file-based-catalog).
@@ -176,8 +176,6 @@ spec:
               type: string
           results:
             - name: VERSION
-              description: Semantic version extracted from git tag ref
-            - name: MAJOR_VERSION
               description: Semantic version extracted from git tag ref
           steps:
             - name: extract
@@ -486,6 +484,33 @@ spec:
             operator: in
             values:
               - "false"
+    finally:
+      - name: slack-webhook-notification
+        params:
+          - name: message
+            value: |
+              :rotating_light: *Konflux build failed*
+              *Repository:* <$(params.git-url)|hyperfleet-operator-bundle>
+              *Pipeline:* `hyperfleet-operator-bundle-on-tag`
+              *Commit:* <https://github.com/openshift-hyperfleet/hyperfleet-operator-bundle/commit/$(params.revision)|$(params.revision)>
+              *Failed run:* <https://konflux-ui.apps.kflux-prd-rh02.0fk9.p1.openshiftapps.com/ns/$(context.pipelineRun.namespace)/pipelinerun/$(context.pipelineRun.name)|Open in Konflux>
+          - name: secret-name
+            value: hyperfleet-slack-webhook-notification-secret
+          - name: key-name
+            value: hyperfleet-slack-webhook-url
+        taskRef:
+          resolver: bundles
+          params:
+            - name: bundle
+              value: quay.io/konflux-ci/tekton-catalog/task-slack-webhook-notification:0.1@sha256:55fdfbe3b4a565aa58fc76d6209a3b69832f43373ee6e33555bb69423a8b9ceb
+            - name: name
+              value: slack-webhook-notification
+            - name: kind
+              value: Task
+        when:
+          - input: $(tasks.status)
+            operator: in
+            values: ["Failed"]
     workspaces:
       - name: git-auth
         optional: true
