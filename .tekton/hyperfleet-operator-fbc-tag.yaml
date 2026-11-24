@@ -224,7 +224,6 @@ spec:
           - name: BUILD_ARGS
             value:
               - $(params.build-args[*])
-              - APP_VERSION=$(tasks.parse-tag.results.VERSION)
         runAfter:
           - clone-repository
         taskRef:
