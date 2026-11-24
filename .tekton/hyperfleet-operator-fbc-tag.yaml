@@ -45,6 +45,10 @@ spec:
         name: git-url
         type: string
       - default: ""
+        description: Git ref that triggered the build (e.g., refs/tags/v1.0.0-rc1)
+        name: target-branch
+        type: string
+      - default: ""
         description: Revision of the Source Repository
         name: revision
         type: string
