@@ -3,7 +3,7 @@
 These PipelineRuns notify the HyperFleet team's `#hyperfleet-e2e-status` Slack
 channel when a completed build fails: `hyperfleet-operator-on-push`,
 `hyperfleet-operator-on-tag`, `hyperfleet-operator-bundle-on-push`, and
-`hyperfleet-operator-catalog-on-push`.
+`hyperfleet-operator-fbc-on-tag`.
 
 Each inline pipeline has a `slack-webhook-notification` final task guarded by
 `$(tasks.status) in ["Failed"]`. The message names the pipeline and links the
@@ -31,7 +31,7 @@ and named key exist in `hyperfleet-tenant` and are accessible to the build
 service account. The image and tag definitions use
 `build-pipeline-hyperfleet-operator`; bundle and catalog use their respective
 `build-pipeline-hyperfleet-operator-bundle` and
-`build-pipeline-hyperfleet-operator-catalog` accounts. Do not print the Secret
+`build-pipeline-hyperfleet-operator-fbc` accounts. Do not print the Secret
 value while diagnosing delivery.
 
 ## Rotate the webhook

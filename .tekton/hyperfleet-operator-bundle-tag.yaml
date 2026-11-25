@@ -568,9 +568,9 @@ spec:
       - name: message
         value: |
           :rotating_light: *Konflux build failed*
-          *Repository:* <$(params.git-url)|hyperfleet-operator-bundle>
+          *Repository:* <$(params.git-url)|hyperfleet-operator>
           *Pipeline:* `hyperfleet-operator-bundle-on-tag`
-          *Commit:* <https://github.com/openshift-hyperfleet/hyperfleet-operator-bundle/commit/$(params.revision)|$(params.revision)>
+          *Commit:* <https://github.com/openshift-hyperfleet/hyperfleet-operator/commit/$(params.revision)|$(params.revision)>
           *Failed run:* <https://konflux-ui.apps.kflux-prd-rh02.0fk9.p1.openshiftapps.com/ns/$(context.pipelineRun.namespace)/pipelinerun/$(context.pipelineRun.name)|Open in Konflux>
       - name: secret-name
         value: hyperfleet-slack-webhook-notification-secret
