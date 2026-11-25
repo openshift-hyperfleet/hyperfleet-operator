@@ -125,17 +125,29 @@ fixture passwords before use. The example broker password must be URL-safe
 (for example, random hex). Keep rendered fixture files outside the repository
 and protect them with mode `0600`. Do not put registry credentials in YAML.
 
-Replace every literal placeholder before loading the files; the harness does
-not expand environment variables in YAML:
+The harness reads concrete YAML values. Release qualification replaces the
+two example scenario placeholders and commits the resulting `scenario.yaml`
+alongside `fixtures.template.yaml` in `hyperfleet-release`.
 
-| Placeholder | Required replacement |
+| Placeholder in `scenario.example.yaml` | Value set during release qualification |
 | --- | --- |
-| `${UPGRADE_POSTGRES_IMAGE}` | Full PostgreSQL image reference with a verified `@sha256:` digest, compatible with both releases and the fixture's UID/security settings. |
-| `${UPGRADE_RABBITMQ_IMAGE}` | Full RabbitMQ image reference with a verified `@sha256:` digest and compatible fixture settings. |
-| `${UPGRADE_DB_PASSWORD}` | Random database fixture password; the PostgreSQL pod reads the same Secret. |
-| `${UPGRADE_BROKER_PASSWORD}` | Random URL-safe broker fixture password; use the same value in both Secret entries. |
 | `${UPGRADE_API_HASH_CHANGE}` | Unquoted YAML `true` or `false`, determined from the selected release pair. |
-| `${UPGRADE_TO_BUNDLE_DIGEST}` | The same full digest-pinned bundle reference passed as `UPGRADE_TO_BUNDLE`, after verifying its source uses the declared hash scheme and inputs. |
+| `${UPGRADE_TO_BUNDLE_DIGEST}` | The full bundle reference by digest passed as `UPGRADE_TO_BUNDLE`, after verifying that its source uses the declared hash scheme and inputs. |
+
+Export `UPGRADE_POSTGRES_IMAGE` and `UPGRADE_RABBITMQ_IMAGE` in your shell.
+From the operator repository root, run
+`GOTOOLCHAIN=go1.26.7 go run ./test/e2e/upgrade/cmd/render-fixtures <scratch-directory>`.
+The directory must contain the qualified `scenario.yaml` and
+`fixtures.template.yaml`. The renderer creates `fixtures.yaml` with mode
+`0600` and refuses to overwrite an existing file. Prow calls it from the
+operator source image and runs the suite from the pinned target commit.
+
+| Placeholder in `fixtures.template.yaml` | Source | Required value |
+| --- | --- | --- |
+| `${UPGRADE_POSTGRES_IMAGE}` | Environment, supplied by Gangway in Prow | Full PostgreSQL image reference by digest, compatible with both releases and the fixture's UID and security settings. |
+| `${UPGRADE_RABBITMQ_IMAGE}` | Environment, supplied by Gangway in Prow | Full RabbitMQ image reference by digest, compatible with the fixture settings. |
+| `${UPGRADE_DB_PASSWORD}` | Renderer | Random database fixture password. The PostgreSQL pod reads the same Secret. |
+| `${UPGRADE_BROKER_PASSWORD}` | Renderer | Random URL-safe password, reused in both broker Secret entries. |
 
 `hashChange` is a required boolean for every target component also present in
 N−1. It checks whether that component's config-hash annotation should change
@@ -355,7 +367,7 @@ v0.46.0 require Go 1.26.3 or newer. The dynamic client still performs cluster re
 including the UID/resource-version-checked approval patch and cleanup deletes.
 
 ```sh
-GOTOOLCHAIN=go1.26.7 go test -race ./test/e2e/upgrade
+GOTOOLCHAIN=go1.26.7 go test -race ./test/e2e/upgrade/...
 GOTOOLCHAIN=go1.26.7 go test -tags=upgrade_e2e ./test/e2e/upgrade -run '^$'
 make lint-config lint test build
 git diff --check

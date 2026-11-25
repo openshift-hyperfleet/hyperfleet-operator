@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/openshift-hyperfleet/hyperfleet-operator/test/e2e/upgrade/internal/fixtures"
 )
 
 func exampleConfig(t *testing.T) Config {
@@ -19,19 +21,19 @@ func exampleConfig(t *testing.T) Config {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixtures, err := os.ReadFile("testdata/fixtures.example.yaml")
+	template, err := os.ReadFile("testdata/fixtures.example.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	scenario = []byte(strings.NewReplacer("${UPGRADE_API_HASH_CHANGE}", "false",
 		"${UPGRADE_TO_BUNDLE_DIGEST}", testImage("bundle", "b")).Replace(string(scenario)))
-	fixtures = []byte(strings.NewReplacer("${UPGRADE_POSTGRES_IMAGE}", testImage("postgres", "c"),
-		"${UPGRADE_RABBITMQ_IMAGE}", testImage("rabbitmq", "d"), "${UPGRADE_DB_PASSWORD}", "unit-test-password",
-		"${UPGRADE_BROKER_PASSWORD}", "unit-test-broker-password").Replace(string(fixtures)))
-	for name, data := range map[string][]byte{"scenario.yaml": scenario, "fixtures.yaml": fixtures} {
+	for name, data := range map[string][]byte{"scenario.yaml": scenario, "fixtures.template.yaml": template} {
 		if err = os.WriteFile(filepath.Join(dir, name), data, 0600); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err = fixtures.Render(dir, testImage("postgres", "c"), testImage("rabbitmq", "d")); err != nil {
+		t.Fatal(err)
 	}
 	for name, value := range map[string]string{
 		kubeconfigEnv: filepath.Join(dir, "explicit.kubeconfig"), artifactDirEnv: filepath.Join(dir, "artifacts"),
