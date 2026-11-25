@@ -15,4 +15,4 @@ entries:
       - name: hyperfleet-operator.v0.0.1
         skipRange: "<0.0.1"
   - schema: olm.bundle
-    image: quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator-bundle@sha256:fa9e3c5dcad68fd785d637dd49d38598fd8019f7c8c613463050076351f1d340
+    image: quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator-bundle@sha256:653b2a962614ea633d048a66a3b5839ab2978aae96ab4b9249ff53bb3e6d513f
