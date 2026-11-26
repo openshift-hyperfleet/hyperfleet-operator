@@ -28,11 +28,6 @@ spec:
       labels:
         app.kubernetes.io/name: hyperfleet-postgres
     spec:
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 999
-        runAsGroup: 999
-        fsGroup: 999
       containers:
         - name: postgresql
           image: docker.io/library/postgres:14.2
@@ -48,13 +43,6 @@ spec:
               value: password
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-                - ALL
-            seccompProfile:
-              type: RuntimeDefault
           readinessProbe:
             exec:
               command:

@@ -28,32 +28,17 @@ spec:
       labels:
         app.kubernetes.io/name: hyperfleet-rabbitmq
     spec:
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 999
-        runAsGroup: 999
-        fsGroup: 999
       containers:
         - name: rabbitmq
-          image: docker.io/library/rabbitmq:3.13
+          image: docker.io/library/rabbitmq:3.13-alpine
           ports:
             - name: amqp
               containerPort: 5672
           env:
-            # Users created via RABBITMQ_DEFAULT_USER are not loopback-restricted
-            # (unlike the default guest user), so in-cluster Sentinel connections
-            # are accepted.
             - name: RABBITMQ_DEFAULT_USER
               value: hyperfleet
             - name: RABBITMQ_DEFAULT_PASS
               value: password
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-                - ALL
-            seccompProfile:
-              type: RuntimeDefault
           readinessProbe:
             tcpSocket:
               port: amqp

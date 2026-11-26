@@ -88,9 +88,6 @@ const cleanupTimeout = 30 * time.Second
 var _ = Describe("hyperfleet-operator", Ordered, func() {
 	var controllerPodName string
 
-	// In kind mode, create the operator namespace, install CRDs, and deploy
-	// the operator. The restricted PSA label is applied unconditionally so
-	// that CI clusters also reject non-compliant pods.
 	BeforeAll(func() {
 		if kindMode {
 			By("creating operator namespace")
@@ -109,12 +106,6 @@ var _ = Describe("hyperfleet-operator", Ordered, func() {
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to deploy the operator")
 		}
-
-		By("enforcing the restricted pod security policy on the operator namespace")
-		cmd := exec.Command("kubectl", "label", "--overwrite", "ns", namespace,
-			"pod-security.kubernetes.io/enforce=restricted")
-		_, err := utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
 	})
 
 	// Clean up test-created resources; in kind mode also undeploy the
@@ -535,7 +526,7 @@ var _ = Describe("hyperfleet-operator", Ordered, func() {
 
 	When("provisioning dependencies", func() {
 		It("should provision a RabbitMQ before creating a HyperFleetConfig", func() {
-			By("deploying a disposable RabbitMQ broker in the restricted namespace")
+			By("deploying a disposable RabbitMQ broker")
 			cmd := exec.Command("kubectl", "apply", "-f", "test/e2e/rabbitmq.yaml", "-n", namespace)
 			_, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
@@ -548,7 +539,7 @@ var _ = Describe("hyperfleet-operator", Ordered, func() {
 		})
 
 		It("should provision a PostgreSQL database and the referenced Secrets before creating a HyperFleetConfig", func() {
-			By("deploying a disposable PostgreSQL database in the restricted namespace")
+			By("deploying a disposable PostgreSQL database")
 			cmd := exec.Command("kubectl", "apply", "-f", "test/e2e/postgres.yaml", "-n", namespace)
 			_, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
@@ -575,6 +566,13 @@ var _ = Describe("hyperfleet-operator", Ordered, func() {
 	})
 
 	When("deploying the HyperFleetConfig", func() {
+		It("should enforce the restricted pod security policy on the operator namespace", func() {
+			cmd := exec.Command("kubectl", "label", "--overwrite", "ns", namespace,
+				"pod-security.kubernetes.io/enforce=restricted")
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
 		It("should apply the HyperFleetConfig in test/e2e/hyperfleetconfig.yaml", func() {
 			cmd := exec.Command("kubectl", "apply", "-f", "test/e2e/hyperfleetconfig.yaml")
 			_, err := utils.Run(cmd)
